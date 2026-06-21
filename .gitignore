@@ -18,4 +18,8 @@ Thumbs.db
 .idea/
 .vscode/
 
-# NOTE: the released ImageGridMaker.exe in this folder IS committed on purpose.
+
+# The exe is published on GitHub Releases, not committed to the repo
+*.exe
+secreen_shot.JPG
+_t.txt

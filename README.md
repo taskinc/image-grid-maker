@@ -8,6 +8,10 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
+![Image Grid Maker — application window](assets/screenshot.jpg)
+
+*Example output grid:*
+
 ![Sample grid](assets/sample_grid.jpg)
 
 ---
@@ -55,8 +59,8 @@ pip install -r requirements.txt
 
 ### Option A — Download and run (recommended)
 
-Download **`ImageGridMaker.exe`** from this repository (or the
-[Releases](https://github.com/taskinc/image-grid-maker/releases) page) and
+Download the latest **`ImageGridMaker.exe`** from the
+[**Releases**](https://github.com/taskinc/image-grid-maker/releases) page and
 double-click it. No Python needed.
 
 > On first launch Windows SmartScreen may warn about an unsigned app — choose
@@ -76,11 +80,6 @@ pip install -r requirements.txt pyinstaller
 pyinstaller --clean --onefile --windowed --name ImageGridMaker ^
   --collect-all tkinterdnd2 image_grid_maker.py
 ```
-
-If PyInstaller fails with an `EndUpdateResourceW` / error 122, your build path
-is too long — build from a short folder (e.g. `C:\igm`) or point PyInstaller at
-short temp paths with `--workpath %TEMP%\b --distpath %TEMP%\d`, and make sure
-no copy of the app is still running.
 
 ## Usage
 
@@ -107,7 +106,6 @@ options, and the **Log** panel records each step.
 | `image_grid_maker.py` | The GUI application (run this). |
 | `image_grid_core.py`  | Image/scan/grid logic (imported by the app). |
 | `test_image_grid_core.py` | Headless tests for the core logic. |
-| `ImageGridMaker.exe` | The compiled app (download & run). |
 | `requirements.txt` | Python dependencies. |
 
 ## Tests
