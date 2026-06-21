@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller intermediate output
+build/
+dist/
+*.spec
+
+# Local helper scripts (not part of the published repo)
+build_exe.bat
+push_to_github.bat
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# NOTE: the released ImageGridMaker.exe in this folder IS committed on purpose.
