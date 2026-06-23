@@ -6,12 +6,19 @@ multiprocessing workers. Requires: Pillow.
 """
 
 import os
+import random
 from datetime import datetime
 from collections import Counter
 from fractions import Fraction
 from concurrent.futures import ProcessPoolExecutor
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFile
+
+# Robustness for large photo sets: tolerate slightly truncated JPEGs and do not
+# reject very large (photogrammetry / stitched) images. Without these, such
+# images raise inside the worker and the cell silently renders blank.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+Image.MAX_IMAGE_PIXELS = None
 
 # ----------------------------------------------------------------------------
 # Configuration
@@ -53,11 +60,17 @@ class Photo:
     def bucket(self):
         return round(self.aspect, ASPECT_BUCKET_DECIMALS)
 
-    def sort_key(self):
-        # Sub-folder (by name) -> Date Taken -> file name (when no date).
+    @property
+    def is_landscape(self):
+        return self.aspect >= 1.0
+
+    def within_folder_key(self):
         has_date = 0 if self.taken is not None else 1
-        date_val = self.taken if self.taken is not None else datetime.min
-        return (self.folder.lower(), has_date, date_val, self.name.lower())
+        return (has_date, self.taken if self.taken is not None else datetime.min,
+                self.name.lower())
+
+    def sort_key(self):
+        return (self.folder.lower(),) + self.within_folder_key()
 
 
 # ----------------------------------------------------------------------------
@@ -142,7 +155,7 @@ def scan_folders(roots, include_subfolders=True, progress=None, workers=None):
     photos = []
     seen = set()
 
-    def _add(rec, i):
+    def _add(rec):
         if rec is None:
             return
         full, dirpath, fn, w, h, taken = rec
@@ -154,17 +167,70 @@ def scan_folders(roots, include_subfolders=True, progress=None, workers=None):
 
     if workers <= 1 or total < PARALLEL_THRESHOLD:
         for i, item in enumerate(files):
-            _add(_probe(item), i)
+            _add(_probe(item))
             if progress and (i % 50 == 0 or i == total - 1):
                 progress(i + 1, total)
     else:
         chunk = max(1, total // (workers * 8))
         with ProcessPoolExecutor(max_workers=workers) as ex:
             for i, rec in enumerate(ex.map(_probe, files, chunksize=chunk)):
-                _add(rec, i)
+                _add(rec)
                 if progress and (i % 50 == 0 or i == total - 1):
                     progress(i + 1, total)
     return photos
+
+
+# ----------------------------------------------------------------------------
+# Ordering
+# ----------------------------------------------------------------------------
+
+def order_photos(photos, by="name", descending=False, seed=0):
+    """Sub-folders ordered by name/created/random; within each, Date Taken/name."""
+    folders = sorted({p.folder for p in photos}, key=lambda f: f.lower())
+    if by == "created":
+        def fkey(f):
+            try:
+                return os.path.getctime(f)
+            except OSError:
+                return 0.0
+        ordered = sorted(folders, key=fkey)
+    elif by == "random":
+        ordered = folders[:]
+        random.Random(seed).shuffle(ordered)
+    else:
+        ordered = folders
+    if descending:
+        ordered = list(reversed(ordered))
+    rank = {f: i for i, f in enumerate(ordered)}
+    return sorted(photos, key=lambda p: (rank[p.folder],) + p.within_folder_key())
+
+
+def dirs_with_images(root, recursive=True):
+    """Directories that directly contain >=1 image (root included). Sorted by name."""
+    out = []
+    if recursive:
+        for dirpath, _dirs, files in os.walk(root):
+            if any(os.path.splitext(f)[1].lower() in IMAGE_EXTS for f in files):
+                out.append(dirpath)
+    else:
+        try:
+            if any(os.path.splitext(f)[1].lower() in IMAGE_EXTS
+                   for f in os.listdir(root)
+                   if os.path.isfile(os.path.join(root, f))):
+                out.append(root)
+        except OSError:
+            pass
+    return sorted(set(out), key=lambda d: d.lower())
+
+
+def order_by_folder_list(photos, folders):
+    """Order photos by the explicit folder list order, then Date Taken / name."""
+    rank = {os.path.normcase(os.path.abspath(f)): i for i, f in enumerate(folders)}
+    big = len(folders)
+    def key(p):
+        r = rank.get(os.path.normcase(os.path.abspath(p.folder)), big)
+        return (r,) + p.within_folder_key()
+    return sorted(photos, key=key)
 
 
 # ----------------------------------------------------------------------------
@@ -178,11 +244,7 @@ def ratio_label(ar):
 
 
 def aspect_histogram(photos):
-    """
-    Group photos by rounded aspect ratio.
-    Returns a list of dicts sorted by count desc:
-        {'bucket': float, 'count': int, 'ar': float (median), 'label': str}
-    """
+    """Group photos by rounded aspect ratio; list of dicts sorted by count desc."""
     groups = {}
     for p in photos:
         groups.setdefault(p.bucket, []).append(p.aspect)
@@ -223,19 +285,40 @@ def select_photos(photos, count, method="first"):
 
 
 # ----------------------------------------------------------------------------
+# Slots
+# ----------------------------------------------------------------------------
+
+def make_slots(photos, mixed=False):
+    """Landscapes fill a slot; in mixed mode two portraits share one slot."""
+    if not mixed:
+        return [("L", p, None) for p in photos]
+    slots = []
+    buf = []
+    for p in photos:
+        if p.is_landscape:
+            slots.append(("L", p, None))
+        else:
+            buf.append(p)
+            if len(buf) == 2:
+                slots.append(("P", buf[0], buf[1]))
+                buf = []
+    return slots  # a single leftover portrait is intentionally dropped
+
+
+def count_photos_in_slots(slots):
+    return sum(1 if s[0] == "L" else 2 for s in slots)
+
+
+# ----------------------------------------------------------------------------
 # Grid layout
 # ----------------------------------------------------------------------------
 
 def best_grid(target_count, available, cell_ar, target_out_ar):
-    """
-    Find (cols, rows, used) forming an exact rectangle whose output aspect
-    ratio is closest to target_out_ar, using close to target_count cells
-    (never more than `available`).
-    """
+    """Closest exact rectangle to target_out_ar using close to target_count cells."""
     n = max(1, min(target_count, available))
     best = None
     for cols in range(1, available + 1):
-        for rows in {n // cols, -(-n // cols)}:  # floor, ceil
+        for rows in {n // cols, -(-n // cols)}:
             if rows < 1:
                 continue
             used = cols * rows
@@ -253,12 +336,21 @@ def best_grid(target_count, available, cell_ar, target_out_ar):
 
 
 def cell_size_from_width(grid_width, cols, cell_ar, border):
-    """Derive uniform cell pixel size from the desired total grid width."""
+    """Derive uniform cell (slot) pixel size from the desired total grid width."""
     bw = max(0, int(border))
     inner = grid_width - (cols + 1) * bw
     cell_w = max(1, int(round(inner / cols)))
     cell_h = max(1, int(round(cell_w / cell_ar)))
     return cell_w, cell_h
+
+
+def fit_exact(img, width, target_ar):
+    """Resize the finished grid to exactly width x round(width/target_ar)."""
+    w = max(1, int(round(width)))
+    h = max(1, int(round(w / target_ar)))
+    if img.size == (w, h):
+        return img
+    return img.resize((w, h), Image.LANCZOS)
 
 
 # ----------------------------------------------------------------------------
@@ -270,26 +362,28 @@ def _center_crop_to_ratio(im, target_ar):
     cur = w / h
     if abs(cur - target_ar) < 1e-6:
         return im
-    if cur > target_ar:          # too wide -> trim width
+    if cur > target_ar:
         new_w = int(round(h * target_ar))
         x = (w - new_w) // 2
         return im.crop((x, 0, x + new_w, h))
-    else:                        # too tall -> trim height
-        new_h = int(round(w / target_ar))
-        y = (h - new_h) // 2
-        return im.crop((0, y, w, y + new_h))
+    new_h = int(round(w / target_ar))
+    y = (h - new_h) // 2
+    return im.crop((0, y, w, y + new_h))
 
 
-def _render_cell(args):
-    """Worker: open, orient, crop-to-ratio and resize one photo.
-    Returns (cell_w, cell_h, raw_rgb_bytes) or None on failure."""
-    path, cw, ch, target_ar = args
+def _open_crop_resize(path, w, h):
+    """Open, orient, centre-crop to w:h, resize to (w, h).
+    Uses Image.draft so big JPEGs decode at a reduced scale -> far less memory
+    (the main cause of dropped cells on huge photo sets) and faster."""
     try:
         with Image.open(path) as im:
+            try:
+                im.draft("RGB", (max(1, w * 2), max(1, h * 2)))
+            except Exception:
+                pass
             im = ImageOps.exif_transpose(im).convert("RGB")
-            im = _center_crop_to_ratio(im, target_ar)
-            im = im.resize((cw, ch), Image.LANCZOS)
-            return (cw, ch, im.tobytes())
+            im = _center_crop_to_ratio(im, w / h)
+            return im.resize((w, h), Image.LANCZOS)
     except Exception:
         return None
 
@@ -304,45 +398,74 @@ def _parse_color(color):
     return color
 
 
-def build_grid(selected, cols, rows, cell_w, cell_h, cell_ar,
-               border=0, border_color="#000000", progress=None, workers=None):
-    """Composite selected photos into an exact grid image (parallel rendering)."""
-    bw = max(0, int(border))
-    total_w = cols * cell_w + (cols + 1) * bw
-    total_h = rows * cell_h + (rows + 1) * bw
-    bg = _parse_color(border_color) if bw > 0 else (255, 255, 255)
+def _render_slot(args):
+    """Worker: render one slot to a (cell_w x cell_h) RGB byte buffer."""
+    kind, p1, p2, cw, ch, b, bg = args
+    cell = Image.new("RGB", (cw, ch), bg)
+    if kind == "L":
+        im = _open_crop_resize(p1, cw, ch)
+        if im is not None:
+            cell.paste(im, (0, 0))
+    else:
+        vl = max(1, (cw - b) // 2)
+        vr = max(1, cw - b - vl)
+        im1 = _open_crop_resize(p1, vl, ch)
+        if im1 is not None:
+            cell.paste(im1, (0, 0))
+        im2 = _open_crop_resize(p2, vr, ch)
+        if im2 is not None:
+            cell.paste(im2, (vl + b, 0))
+    return cell.tobytes()
+
+
+def build_slots_image(slots, cols, rows, cell_w, cell_h,
+                      border=0, border_color="#000000", progress=None, workers=None):
+    """Composite slots into an exact grid image (parallel rendering)."""
+    b = max(0, int(border))
+    bg = _parse_color(border_color) if b > 0 else (255, 255, 255)
+    total_w = cols * cell_w + (cols + 1) * b
+    total_h = rows * cell_h + (rows + 1) * b
     canvas = Image.new("RGB", (total_w, total_h), bg)
 
-    n = min(len(selected), cols * rows)
-    tasks = [(selected[i].path, cell_w, cell_h, cell_ar) for i in range(n)]
+    n = min(len(slots), cols * rows)
+    tasks = []
+    for i in range(n):
+        s = slots[i]
+        if s[0] == "L":
+            tasks.append(("L", s[1].path, None, cell_w, cell_h, b, bg))
+        else:
+            tasks.append(("P", s[1].path, s[2].path, cell_w, cell_h, b, bg))
 
-    def _place(idx, rec):
-        if rec is None:
-            return
-        cw, ch, data = rec
+    def _place(idx, data):
         r, c = divmod(idx, cols)
-        x = bw + c * (cell_w + bw)
-        y = bw + r * (cell_h + bw)
-        cell = Image.frombytes("RGB", (cw, ch), data)
-        canvas.paste(cell, (x, y))
+        x = b + c * (cell_w + b)
+        y = b + r * (cell_h + b)
+        canvas.paste(Image.frombytes("RGB", (cell_w, cell_h), data), (x, y))
 
     if workers is None:
         workers = n_workers()
 
     if workers <= 1 or n < PARALLEL_THRESHOLD:
         for idx in range(n):
-            _place(idx, _render_cell(tasks[idx]))
+            _place(idx, _render_slot(tasks[idx]))
             if progress and (idx % 5 == 0 or idx == n - 1):
                 progress(idx + 1, n)
     else:
         chunk = max(1, n // (workers * 8))
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            for idx, rec in enumerate(ex.map(_render_cell, tasks, chunksize=chunk)):
-                _place(idx, rec)
+            for idx, data in enumerate(ex.map(_render_slot, tasks, chunksize=chunk)):
+                _place(idx, data)
                 if progress and (idx % 5 == 0 or idx == n - 1):
                     progress(idx + 1, n)
-
     return canvas
+
+
+def build_grid(selected, cols, rows, cell_w, cell_h, cell_ar=None,
+               border=0, border_color="#000000", progress=None, workers=None):
+    """Back-compatible single-photo grid (each photo fills one slot)."""
+    slots = [("L", p, None) for p in selected]
+    return build_slots_image(slots, cols, rows, cell_w, cell_h,
+                             border, border_color, progress, workers)
 
 
 def save_image(img, path, fmt="JPEG", quality=90):

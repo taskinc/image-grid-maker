@@ -3,7 +3,7 @@
 > Turn thousands of photos (e.g. photogrammetry captures) into a single, clean
 > grid image — always a perfect square or rectangle, no empty cells.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.1-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -25,15 +25,15 @@ files) and does the tedious parts for you:
 - **Finds and groups by aspect ratio.** After scanning it lists every aspect
   ratio present with photo counts. You pick which to include; photos of other
   shapes are **centre-cropped** to a single cell ratio so the grid stays uniform.
-- **Smart ordering.** Photos are sorted by sub-folder (A→Z), then by **Date
-  Taken** (EXIF), falling back to file name when no date exists.
+- **Smart ordering.** Photos are sorted by sub-folder, then by **Date Taken** (EXIF), falling back to file name. Sub-folders can be ordered by **name, creation date, or random**, ascending or descending.
+- **Mixed orientation (v1.0.1).** Optionally keep portrait photos too: two portraits share one landscape slot (split by a single border), so the grid stays a perfect rectangle with uniform borders.
 - **Pick how many and how.** Use the first *N* photos, or sample **evenly** across
   the whole set.
 - **Exact grid, every time.** You give a target output aspect ratio (e.g. 16:9)
   and the app computes the closest rows × columns with **no empty cells**.
 - **Uniform resolution.** You set the final image **width in pixels**; every cell
   is rendered at the same size regardless of the source resolution.
-- **Output options.** JPEG (with quality) or PNG, plus an optional coloured border.
+- **Output options.** JPEG (with quality) or PNG, an optional coloured border, and an exact-fit toggle to force the precise output size.
 - **Fast.** Scanning and rendering run across multiple CPU cores (default 80%).
 - **Convenient UI.** Drag-and-drop folders, a live layout preview, per-section
   help (`?`) buttons, and a log panel.
@@ -119,6 +119,19 @@ python test_image_grid_core.py
 
 ## Version
 
+**1.0.1**
+
+- Added folders are expanded into every image-containing sub-folder, each listed
+  separately. "Order folders by" (name / creation date / random, asc/desc)
+  re-sequences the whole list; picking Random again reshuffles.
+- Mixed landscape + portrait mode (two portraits per slot, borders stay aligned).
+- Photo selection now has "Use all available photos" (default).
+- "Preview structure..." opens a separate window showing the grid's cells,
+  borders and portrait splits, with an adjustable preview border width (black, default 1px; scales to any photo count).
+- "Fit output exactly to width x aspect ratio" option for a pixel-exact result.
+- Robust on huge photo sets: big JPEGs are decoded at reduced scale (much lower memory, so cells no longer drop out), truncated files are tolerated, and the large-image guard is lifted.
+- About box with version and repo link.
+
 **1.0.0** — first public release.
 
 - Folder scanning with parallel metadata read
@@ -133,8 +146,4 @@ python test_image_grid_core.py
 
 ## License
 
-Released under the **MIT License** — see [LICENSE](LICENSE).
-
-## Author
-
-**cagri taskin** — https://github.com/taskinc/image-grid-maker
+Released under t
