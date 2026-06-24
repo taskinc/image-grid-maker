@@ -3,16 +3,12 @@
 > Turn thousands of photos (e.g. photogrammetry captures) into a single, clean
 > grid image — always a perfect square or rectangle, no empty cells.
 
-![Version](https://img.shields.io/badge/version-1.0.1-blue)
+![Version](https://img.shields.io/badge/version-1.0.2-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 ![Image Grid Maker — application window](assets/screenshot.jpg)
-
-*Example output grid:*
-
-![Sample grid](assets/sample_grid.jpg)
 
 ---
 
@@ -26,7 +22,7 @@ files) and does the tedious parts for you:
   ratio present with photo counts. You pick which to include; photos of other
   shapes are **centre-cropped** to a single cell ratio so the grid stays uniform.
 - **Smart ordering.** Photos are sorted by sub-folder, then by **Date Taken** (EXIF), falling back to file name. Sub-folders can be ordered by **name, creation date, or random**, ascending or descending.
-- **Mixed orientation (v1.0.1).** Optionally keep portrait photos too: two portraits share one landscape slot (split by a single border), so the grid stays a perfect rectangle with uniform borders.
+- **Mixed orientation (set-based).** Combine landscape and portrait folders in one grid: each folder is a set classified by its dominant orientation, packed in equal-width groups (you pick the base ratio A and the portrait/landscape width ratio r = 1/2, 3/5 or 2/3). Always a perfect rectangle, in folder order.
 - **Pick how many and how.** Use the first *N* photos, or sample **evenly** across
   the whole set.
 - **Exact grid, every time.** You give a target output aspect ratio (e.g. 16:9)
@@ -35,8 +31,7 @@ files) and does the tedious parts for you:
   is rendered at the same size regardless of the source resolution.
 - **Output options.** JPEG (with quality) or PNG, an optional coloured border, and an exact-fit toggle to force the precise output size.
 - **Fast.** Scanning and rendering run across multiple CPU cores (default 80%).
-- **Convenient UI.** Drag-and-drop folders, a live layout preview, per-section
-  help (`?`) buttons, and a log panel.
+- **Convenient UI.** Drag-and-drop folders, a built-in live preview pane (resizable divider), per-section help (`?`) buttons, and a log panel.
 
 ---
 
@@ -86,16 +81,14 @@ pyinstaller --clean --onefile --windowed --name ImageGridMaker ^
 1. **Source folders** — drag folders onto the window, or click *Add folder*.
    Sub-folders are included by default.
 2. **Scan & analyse** — reads every image and groups it by aspect ratio.
-3. **Aspect ratios** — tick the ratios to include and choose the one ratio to
-   *crop all included photos to* (the most common ratio is pre-selected).
+3. **Aspect ratios** — ratios are split into **Landscape** and **Portrait**; tick the ones to include and the ratio to *crop all included photos to*. For **Mixed mode** (combine landscape + portrait folders), tick at least one of each and set the base ratio A and width ratio r.
 4. **Photo selection** — set how many photos, and *First N* vs *Evenly spaced*.
 5. **Output layout** — type the target aspect ratio; the app shows the exact grid.
 6. **Resolution & format** — set the output width (px), and JPEG/PNG + quality.
 7. **Border** — optional width (0 = none) and colour.
 8. **Performance** — the percentage of CPU cores to use.
 
-Then click **Generate grid…**. Every group has a **?** button explaining its
-options, and the **Log** panel records each step.
+The **live preview pane** on the right shows the exact grid structure as you change options (drag the divider to resize it). Then click **Generate grid…**. Every group has a **?** button explaining its options, and the **Log** panel records each step.
 
 ---
 
@@ -118,6 +111,13 @@ python test_image_grid_core.py
 ---
 
 ## Version
+
+**1.0.2**
+
+- Mixed mode rebuilt as set-based: each folder is one image set (dominant orientation), with selectable base ratio A and width ratio r (1/2, 3/5, 2/3); only ticked aspect-ratio groups are used and the photo-count selection applies per folder first.
+- Aspect-ratio groups are split into Landscape and Portrait; Mixed mode is greyed out unless at least one of each is ticked.
+- Live preview is now an always-on pane inside the main window (resizable vertical divider) instead of a separate button/window.
+- New defaults: output width 3840 px, border 1 px black.
 
 **1.0.1**
 

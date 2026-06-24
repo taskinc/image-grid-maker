@@ -6,6 +6,7 @@ multiprocessing workers. Requires: Pillow.
 """
 
 import os
+import math
 import random
 from datetime import datetime
 from collections import Counter
@@ -466,6 +467,131 @@ def build_grid(selected, cols, rows, cell_w, cell_h, cell_ar=None,
     slots = [("L", p, None) for p in selected]
     return build_slots_image(slots, cols, rows, cell_w, cell_h,
                              border, border_color, progress, workers)
+
+
+# ----------------------------------------------------------------------------
+# Mixed mode (set-based): one folder = one image set
+# ----------------------------------------------------------------------------
+
+# r -> (landscapes per horizontal group, portraits per vertical group)
+GROUP_SIZES = {"1/2": (1, 2), "3/5": (3, 5), "2/3": (2, 3)}
+R_VALUES = {"1/2": 0.5, "3/5": 0.6, "2/3": 2.0 / 3.0}
+MIN_SET_IMAGES = 15
+
+
+def classify_set(photos):
+    """Classify a folder's photos by dominant orientation.
+    Returns ('H'|'V', kept_photos) where kept are only the dominant orientation,
+    sorted by Date Taken (EXIF) then file name. Ties go to horizontal."""
+    land = [p for p in photos if p.is_landscape]
+    port = [p for p in photos if not p.is_landscape]
+    if len(land) >= len(port):
+        kind, keep = "H", land
+    else:
+        kind, keep = "V", port
+    keep = sorted(keep, key=lambda p: p.within_folder_key())
+    return kind, keep
+
+
+def mixed_validity(A, r_key):
+    """(ok, balanced_crop). ok means A is wide enough for r (no upscaling)."""
+    r = R_VALUES[r_key]
+    retained = 1.0 / (A * math.sqrt(r))
+    balanced = 1.0 - retained
+    return balanced >= -1e-9, balanced
+
+
+def mixed_cell_ar(r_key):
+    """Group-cell width:height (borderless). gh/sqrt(r) == gv*sqrt(r)."""
+    gh, _gv = GROUP_SIZES[r_key]
+    return gh / math.sqrt(R_VALUES[r_key])
+
+
+def select_and_classify(folder_photos, count, method="first"):
+    """Per folder, in folder order: sort by Date Taken/name, apply the user's
+    photo-count selection FIRST (First N / Evenly spaced), then classify the
+    selected subset by dominant orientation. count=None means use all."""
+    ordered = sorted(folder_photos, key=lambda p: p.within_folder_key())
+    if count is None or count >= len(ordered):
+        sel = ordered
+    else:
+        sel = select_photos(ordered, count, method)
+    return classify_set(sel)
+
+
+def build_mixed_groups(sets, r_key):
+    """sets: list of (kind, photos) in folder order (already classified & sorted).
+    Returns a flat list of groups in folder order; each group is (kind, [photos])
+    of size gh (H) or gv (V). Each set is trimmed from the END to a whole number
+    of groups; sets with < MIN_SET_IMAGES usable images are skipped."""
+    gh, gv = GROUP_SIZES[r_key]
+    groups = []
+    for kind, photos in sets:
+        gsize = gh if kind == "H" else gv
+        usable = (len(photos) // gsize) * gsize
+        if usable < MIN_SET_IMAGES:
+            continue
+        kept = photos[:usable]
+        for i in range(0, usable, gsize):
+            groups.append((kind, kept[i:i + gsize]))
+    return groups
+
+
+def count_photos_in_groups(groups):
+    return sum(len(g[1]) for g in groups)
+
+
+def _render_group(args):
+    """Worker: render one group cell = N tiles side by side, borders between."""
+    paths, cw, ch, b, bg = args
+    n = len(paths)
+    cell = Image.new("RGB", (cw, ch), bg)
+    inner = cw - (n - 1) * b
+    base = max(1, inner // n)
+    widths = [base] * (n - 1) + [max(1, cw - (base + b) * (n - 1))]
+    x = 0
+    for path, w in zip(paths, widths):
+        im = _open_crop_resize(path, w, ch)
+        if im is not None:
+            cell.paste(im, (x, 0))
+        x += w + b
+    return cell.tobytes()
+
+
+def build_mixed_image(groups, cols, rows, cell_w, cell_h,
+                      border=0, border_color="#000000", progress=None, workers=None):
+    """Composite group cells into an exact grid (parallel)."""
+    b = max(0, int(border))
+    bg = _parse_color(border_color) if b > 0 else (255, 255, 255)
+    total_w = cols * cell_w + (cols + 1) * b
+    total_h = rows * cell_h + (rows + 1) * b
+    canvas = Image.new("RGB", (total_w, total_h), bg)
+
+    n = min(len(groups), cols * rows)
+    tasks = [(tuple(p.path for p in groups[i][1]), cell_w, cell_h, b, bg)
+             for i in range(n)]
+
+    def _place(idx, data):
+        r, c = divmod(idx, cols)
+        x = b + c * (cell_w + b)
+        y = b + r * (cell_h + b)
+        canvas.paste(Image.frombytes("RGB", (cell_w, cell_h), data), (x, y))
+
+    if workers is None:
+        workers = n_workers()
+    if workers <= 1 or n < PARALLEL_THRESHOLD:
+        for idx in range(n):
+            _place(idx, _render_group(tasks[idx]))
+            if progress and (idx % 5 == 0 or idx == n - 1):
+                progress(idx + 1, n)
+    else:
+        chunk = max(1, n // (workers * 8))
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            for idx, data in enumerate(ex.map(_render_group, tasks, chunksize=chunk)):
+                _place(idx, data)
+                if progress and (idx % 5 == 0 or idx == n - 1):
+                    progress(idx + 1, n)
+    return canvas
 
 
 def save_image(img, path, fmt="JPEG", quality=90):

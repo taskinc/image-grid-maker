@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover
 _BaseTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
 
 APP_NAME = "Image Grid Maker"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 AUTHOR = "cagri taskin"
 GITHUB_URL = "https://github.com/taskinc/image-grid-maker"
 
@@ -55,21 +55,31 @@ HELP = {
     "ratios": ("Photos are grouped by shape. Tick the ratios you want to include. "
                "'Crop all included photos to' sets one cell shape; any included "
                "photo of a different shape is centre-cropped to it. The most common "
-               "ratio is pre-selected. Mixed mode also keeps portrait photos: "
-               "two portraits share one landscape slot, split by one border, so "
-               "the grid stays an exact rectangle."),
+               "ratio is pre-selected.\n\n"
+               "Ratios are split into Landscape and Portrait lists; only ticked "
+               "groups are used. Mixed mode needs at least one Landscape AND one "
+               "Portrait ratio ticked, otherwise it is greyed out.\n\n"
+               "Mixed mode (set-based): each FOLDER is one set, classified by its "
+               "dominant orientation among the ticked images (the other orientation "
+               "is dropped). Your photo-count selection is applied per folder first. "
+               "'Base ratio A' is the landscape ratio (verticals use 1/A); 'r' "
+               "(1/2, 3/5, 2/3) is the portrait-to-landscape width ratio. Landscapes "
+               "pack in groups of 1/3/2 and portraits in groups of 2/5/3 (equal-"
+               "width), filling one perfect rectangle in folder order. Sets with "
+               "< 15 usable images are skipped; A must be >= 1/sqrt(r) or the combo "
+               "is disabled."),
     "selection": ("'Use all available photos' (default) places every included photo. "
                   "Untick it to cap the count: 'First N' takes them in order, "
                   "'Evenly spaced' samples uniformly across the whole set."),
     "layout": ("Type the aspect ratio you want the finished grid to be (e.g. 16:9). "
                "The app finds the closest exact rows x columns so there are never "
                "any empty cells."),
-    "resolution": ("Output width sets the final image width in pixels; the height "
-                   "follows the aspect ratio and every cell ends at the same size, "
-                   "whatever the source resolution. JPEG is smaller (set quality); "
-                   "PNG is lossless."),
-    "border": ("An optional frame drawn around and between the cells. Width in "
-               "pixels (0 = no border) and a colour of your choice."),
+    "resolution": ("Output width sets the final image width in pixels (default 3840); "
+                   "the height follows the aspect ratio and every cell ends at the "
+                   "same size, whatever the source resolution. JPEG is smaller (set "
+                   "quality); PNG is lossless."),
+    "border": ("A frame drawn around and between the cells. Width in pixels "
+               "(default 1; 0 = no border) and a colour (default black)."),
     "performance": ("How much of your CPU to use for scanning and rendering. Higher "
                     "is faster but uses more of your machine. 80% is a good default; "
                     "small jobs run single-threaded automatically."),
@@ -80,8 +90,8 @@ class App(_BaseTk):
     def __init__(self):
         super().__init__()
         self.title("Image Grid Maker")
-        self.geometry("840x900")
-        self.minsize(800, 600)
+        self.geometry("1340x880")
+        self.minsize(1080, 640)
 
         self.PAD = {"padx": 8, "pady": 3}
 
@@ -111,32 +121,42 @@ class App(_BaseTk):
         return lf
 
     def _build_ui(self):
-        outer = ttk.Frame(self)
-        outer.pack(fill="both", expand=True)
+        # App on the left, live preview on the right, with a draggable divider.
+        paned = ttk.PanedWindow(self, orient="horizontal")
+        paned.pack(fill="both", expand=True)
+        left = ttk.Frame(paned)
+        right = ttk.Frame(paned)
+        paned.add(left, weight=1)
+        paned.add(right, weight=1)
 
-        # Bottom area (always visible): progress + generate, then log.
-        bottom = ttk.Frame(outer)
+        # Start with the divider centred (app and preview equal width).
+        def _center_sash(event):
+            paned.sashpos(0, max(1, event.width // 2))
+            paned.unbind("<Configure>", self._sash_cid)
+        self._sash_cid = paned.bind("<Configure>", _center_sash)
+
+        # ----- LEFT: app controls -----
+        bottom = ttk.Frame(left)
         bottom.pack(side="bottom", fill="both")
 
         g = ttk.Frame(bottom)
         g.pack(fill="x", padx=10, pady=(6, 2))
         self.generate_btn = ttk.Button(g, text="Generate grid...", command=self.start_generate)
         self.generate_btn.pack(side="left")
-        self.progress = ttk.Progressbar(g, mode="determinate", length=360)
+        self.progress = ttk.Progressbar(g, mode="determinate", length=240)
         self.progress.pack(side="left", padx=10)
         ttk.Button(g, text="About", command=self.show_about).pack(side="right")
 
         logf = ttk.LabelFrame(bottom, text="Log")
         logf.pack(fill="both", padx=10, pady=(2, 8))
-        self.log_text = tk.Text(logf, height=7, wrap="word", state="disabled")
+        self.log_text = tk.Text(logf, height=6, wrap="word", state="disabled")
         lsb = ttk.Scrollbar(logf, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=lsb.set)
         lsb.pack(side="right", fill="y")
         self.log_text.pack(side="left", fill="both", expand=True)
 
-        # Scrollable options area.
-        canvas = tk.Canvas(outer, highlightthickness=0)
-        vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas = tk.Canvas(left, highlightthickness=0)
+        vsb = ttk.Scrollbar(left, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
@@ -149,6 +169,21 @@ class App(_BaseTk):
             canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
         canvas.bind("<MouseWheel>", _wheel)
         root.bind("<MouseWheel>", _wheel)
+
+        # ----- RIGHT: live structure preview (always on) -----
+        ph = ttk.Frame(right); ph.pack(fill="x", padx=8, pady=(8, 0))
+        ttk.Label(ph, text="Live preview (grid structure)").pack(side="left")
+        ttk.Label(ph, text="border px:").pack(side="left", padx=(12, 2))
+        self._preview_border_var = tk.IntVar(value=1)
+        ttk.Spinbox(ph, from_=0, to=40, width=5, textvariable=self._preview_border_var,
+                    command=self._render_preview_cv).pack(side="left")
+        self._preview_border_var.trace_add("write", lambda *_a: self._render_preview_cv())
+        self._preview_cv = tk.Canvas(right, bg="#f7f7f7", highlightthickness=0)
+        self._preview_cv.pack(fill="both", expand=True, padx=8, pady=6)
+        self._preview_info = ttk.Label(right, text="", anchor="w",
+                                       wraplength=420, justify="left")
+        self._preview_info.pack(fill="x", padx=8, pady=(0, 8))
+        self._preview_cv.bind("<Configure>", lambda _e: self._render_preview_cv())
 
         # --- 1. Source folders ---------------------------------------
         f1 = self._group(root, "1.  Source folders", "folders")
@@ -197,10 +232,27 @@ class App(_BaseTk):
         self.crop_combo = ttk.Combobox(cr, textvariable=self.crop_var, width=16, state="readonly")
         self.crop_combo.pack(side="left", padx=6)
         self.crop_combo.bind("<<ComboboxSelected>>", lambda _e: self.preview_layout())
-        mr = ttk.Frame(f3); mr.pack(fill="x", padx=6, pady=(0, 4))
+        mr = ttk.Frame(f3); mr.pack(fill="x", padx=6, pady=(0, 2))
         self.mixed_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(mr, text="Mixed mode: also place portrait photos (2 per landscape slot)",
-                        variable=self.mixed_var, command=self.preview_layout).pack(side="left")
+        self.mixed_check = ttk.Checkbutton(
+            mr, text="Mixed mode (combine horizontal + vertical folder sets)",
+            variable=self.mixed_var, command=self._on_mix_change)
+        self.mixed_check.pack(side="left")
+        mr2 = ttk.Frame(f3); mr2.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Label(mr2, text="Base ratio A:").pack(side="left")
+        self.mixA_var = tk.StringVar()
+        self.mixA_combo = ttk.Combobox(mr2, textvariable=self.mixA_var, width=12)
+        self.mixA_combo.pack(side="left", padx=4)
+        self.mixA_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_mix_change())
+        self.mixA_combo.bind("<KeyRelease>", lambda _e: self._on_mix_change())
+        ttk.Label(mr2, text="r:").pack(side="left", padx=(8, 0))
+        self.mixR_var = tk.StringVar(value="1/2")
+        rc = ttk.Combobox(mr2, textvariable=self.mixR_var, width=6, state="readonly",
+                          values=["1/2", "3/5", "2/3"])
+        rc.pack(side="left", padx=4)
+        rc.bind("<<ComboboxSelected>>", lambda _e: self._on_mix_change())
+        self.mix_valid_label = ttk.Label(mr2, text="", foreground="#a00")
+        self.mix_valid_label.pack(side="left", padx=8)
 
         # --- 4. Selection --------------------------------------------
         f4 = self._group(root, "4.  Photo selection", "selection")
@@ -233,16 +285,14 @@ class App(_BaseTk):
         ac.grid(row=0, column=1, sticky="w", padx=6)
         ac.bind("<<ComboboxSelected>>", lambda _e: self.preview_layout())
         ac.bind("<KeyRelease>", lambda _e: self.preview_layout())
-        ttk.Button(gr, text="Preview structure...",
-                   command=self.show_preview_window).grid(row=0, column=2, padx=6)
-        self.layout_label = ttk.Label(f5, text="", wraplength=760, justify="left")
+        self.layout_label = ttk.Label(f5, text="", wraplength=420, justify="left")
         self.layout_label.pack(anchor="w", padx=8, pady=(2, 8))
 
         # --- 6. Resolution & format ----------------------------------
         f6 = self._group(root, "6.  Resolution & format", "resolution")
         gr = ttk.Frame(f6); gr.pack(fill="x", padx=6, pady=4)
         ttk.Label(gr, text="Output width (px):").grid(row=0, column=0, sticky="w", pady=4)
-        self.width_var = tk.StringVar(value="6000")
+        self.width_var = tk.StringVar(value="3840")
         we = ttk.Entry(gr, textvariable=self.width_var, width=10)
         we.grid(row=0, column=1, sticky="w", padx=6)
         we.bind("<KeyRelease>", lambda _e: self.preview_layout())
@@ -272,7 +322,7 @@ class App(_BaseTk):
         f7 = self._group(root, "7.  Border", "border")
         gr = ttk.Frame(f7); gr.pack(fill="x", padx=6, pady=4)
         ttk.Label(gr, text="Border width (px, 0 = none):").grid(row=0, column=0, sticky="w", pady=4)
-        self.border_var = tk.StringVar(value="0")
+        self.border_var = tk.StringVar(value="1")
         be = ttk.Entry(gr, textvariable=self.border_var, width=8)
         be.grid(row=0, column=1, sticky="w", padx=6)
         be.bind("<KeyRelease>", lambda _e: self.preview_layout())
@@ -297,6 +347,7 @@ class App(_BaseTk):
 
         self._toggle_quality()
         self._toggle_use_all()
+        self._update_mixed_enabled()
 
         # Drag-and-drop registration.
         if TkinterDnD is not None:
@@ -500,21 +551,42 @@ class App(_BaseTk):
         self.crop_label_to_bucket = {}
         labels = []
         dom_label = None
+        land = [d for d in hist if d["ar"] >= 1.0]
+        port = [d for d in hist if d["ar"] < 1.0]
+
+        def _add_section(title, items):
+            if not items:
+                return
+            ttk.Label(self.ratio_frame, text=title,
+                      font=("", 9, "bold")).pack(anchor="w", pady=(4, 0))
+            for d in items:
+                b = d["bucket"]
+                self.bucket_to_ar[b] = d["ar"]
+                self.crop_label_to_bucket[d["label"]] = b
+                labels.append(d["label"])
+                var = tk.BooleanVar(value=(b == dominant))
+                self.ratio_vars[b] = var
+                ttk.Checkbutton(
+                    self.ratio_frame,
+                    text="%s   -   %d photos" % (d["label"], d["count"]),
+                    variable=var, command=self.refresh_selection).pack(anchor="w", padx=(12, 0))
+
+        _add_section("Landscape", land)
+        _add_section("Portrait", port)
         for d in hist:
-            b = d["bucket"]
-            self.bucket_to_ar[b] = d["ar"]
-            self.crop_label_to_bucket[d["label"]] = b
-            labels.append(d["label"])
-            if b == dominant:
+            if d["bucket"] == dominant:
                 dom_label = d["label"]
-            var = tk.BooleanVar(value=(b == dominant))
-            self.ratio_vars[b] = var
-            ttk.Checkbutton(self.ratio_frame,
-                            text="%s   -   %d photos" % (d["label"], d["count"]),
-                            variable=var, command=self.refresh_selection).pack(anchor="w")
         self.crop_combo.config(values=labels)
         if dom_label:
             self.crop_var.set(dom_label)
+        ab_values = []
+        for d in hist:
+            ab = d["label"].split(" ")[0]
+            if ab not in ab_values:
+                ab_values.append(ab)
+        self.mixA_combo.config(values=ab_values)
+        if dom_label and not self.mixA_var.get():
+            self.mixA_var.set(dom_label.split(" ")[0])
         self.scan_label.config(text=info)
         self.generate_btn.config(state="normal")
         self.refresh_selection()
@@ -530,7 +602,22 @@ class App(_BaseTk):
                 self.count_var.set(str(len(matching)))
         except ValueError:
             self.count_var.set(str(len(matching)))
+        self._update_mixed_enabled()
         self.preview_layout()
+
+    def _update_mixed_enabled(self):
+        """Mixed mode needs at least one landscape AND one portrait ratio ticked."""
+        if not hasattr(self, "mixed_check"):
+            return
+        has_land = any(self.bucket_to_ar.get(b, 1.0) >= 1.0
+                       for b, v in self.ratio_vars.items() if v.get())
+        has_port = any(self.bucket_to_ar.get(b, 1.0) < 1.0
+                       for b, v in self.ratio_vars.items() if v.get())
+        ok = has_land and has_port
+        self.mixed_check.config(state="normal" if ok else "disabled")
+        if not ok and self.mixed_var.get():
+            self.mixed_var.set(False)
+        self._update_mix_validity()
 
     # --------------------------------------------------------------- layout
     def _order_by(self):
@@ -550,7 +637,43 @@ class App(_BaseTk):
             return self.bucket_to_ar[b]
         return None
 
+    def _mix_A(self):
+        try:
+            return self.parse_aspect(self.mixA_var.get())
+        except Exception:
+            return None
+
+    def _on_mix_change(self):
+        self._update_mix_validity()
+        self.preview_layout()
+
+    def _update_mix_validity(self):
+        if not hasattr(self, "mix_valid_label"):
+            return
+        if not self.mixed_var.get():
+            self.mix_valid_label.config(text="")
+            return
+        A = self._mix_A()
+        r = self.mixR_var.get()
+        if A is None or r not in core.R_VALUES:
+            self.mix_valid_label.config(text="enter a valid base ratio A", foreground="#a00")
+            return
+        if core.mixed_validity(A, r)[0]:
+            self.mix_valid_label.config(text="valid", foreground="#080")
+        else:
+            need = 1.0 / (core.R_VALUES[r] ** 0.5)
+            self.mix_valid_label.config(
+                text="A must be >= %.3f for r=%s" % (need, r), foreground="#a00")
+
     def _compute_layout(self):
+        if not self.photos:
+            return None
+        try:
+            target_ar = self.parse_aspect(self.aspect_var.get())
+        except Exception:
+            return None
+        if self.mixed_var.get():
+            return self._compute_mixed(target_ar)
         if not self.matching:
             return None
         cell_ar = self.crop_ar()
@@ -560,29 +683,51 @@ class App(_BaseTk):
             count = len(self.matching)
         else:
             count = max(1, min(self._int(self.count_var, 1), len(self.matching)))
-        try:
-            target_ar = self.parse_aspect(self.aspect_var.get())
-        except Exception:
-            return None
-        mixed = bool(self.mixed_var.get())
         sel = core.select_photos(self.matching, count, self.method_var.get())
-        slots = core.make_slots(sel, mixed)
+        slots = core.make_slots(sel, False)
         if not slots:
             return None
         cols, rows, used = core.best_grid(len(slots), len(slots), cell_ar, target_ar)
         photos = core.count_photos_in_slots(slots[:used])
-        return cols, rows, used, target_ar, cell_ar, mixed, photos, slots
+        return cols, rows, used, target_ar, cell_ar, "normal", photos, slots
+
+    def _compute_mixed(self, target_ar):
+        if not self.folders:
+            return None
+        A = self._mix_A()
+        r = self.mixR_var.get()
+        if A is None or r not in core.R_VALUES or not core.mixed_validity(A, r)[0]:
+            return None
+        count = None if self.use_all_var.get() else max(1, self._int(self.count_var, 1))
+        method = self.method_var.get()
+        by_folder = {}
+        for p in self.matching:   # only the ticked aspect-ratio groups
+            by_folder.setdefault(os.path.normcase(os.path.abspath(p.folder)), []).append(p)
+        sets = []
+        for f in self.folders:
+            fp = by_folder.get(os.path.normcase(os.path.abspath(f)))
+            if fp:
+                sets.append(core.select_and_classify(fp, count, method))
+        groups = core.build_mixed_groups(sets, r)
+        if not groups:
+            return None
+        cell_ar = core.mixed_cell_ar(r)
+        cols, rows, used = core.best_grid(len(groups), len(groups), cell_ar, target_ar)
+        photos = core.count_photos_in_groups(groups[:used])
+        return cols, rows, used, target_ar, cell_ar, "mixed", photos, groups
 
     def preview_layout(self):
-        """Update the one-line layout summary (the visual is a separate window)."""
+        """Update the layout summary and the embedded live preview."""
         res = self._compute_layout()
         if not res:
             if hasattr(self, "layout_label"):
                 self.layout_label.config(text="")
+            self._preview_plan = None
+            self._render_preview_cv()
             return
-        cols, rows, used, target_ar, cell_ar, mixed, photos, _slots = res
+        cols, rows, used, target_ar, cell_ar, mode, photos, cells = res
         bw = max(0, self._int(self.border_var, 0))
-        grid_w = max(cols + (cols + 1) * bw, self._int(self.width_var, 6000))
+        grid_w = max(cols + (cols + 1) * bw, self._int(self.width_var, 3840))
         cw, ch = core.cell_size_from_width(grid_w, cols, cell_ar, bw)
         total_w = cols * cw + (cols + 1) * bw
         total_h = rows * ch + (rows + 1) * bw
@@ -590,53 +735,29 @@ class App(_BaseTk):
             total_w = grid_w
             total_h = max(1, int(round(grid_w / target_ar)))
         out_ar = total_w / total_h
-        extra = ("  (mixed: %d slots)" % used) if mixed else ""
+        extra = ("  (mixed: %d groups)" % used) if mode == "mixed" else ""
         self.layout_label.config(
             text=("Grid %dx%d = %d photos%s  |  cell %dx%d px  |  output %dx%d px  "
                   "|  aspect %.3f (target %.3f)" %
                   (cols, rows, photos, extra, cw, ch, total_w, total_h, out_ar, target_ar)))
-        # if the preview window is open, refresh it
-        if getattr(self, "_preview_win", None) is not None and self._preview_win.winfo_exists():
-            self._preview_plan = (cols, rows, cell_ar, _slots, used, mixed, photos, target_ar)
-            self._render_preview_cv()
-
-    def show_preview_window(self):
-        res = self._compute_layout()
-        if not res:
-            messagebox.showinfo("Preview", "Scan folders and pick options first.")
-            return
-        cols, rows, used, target_ar, cell_ar, mixed, photos, slots = res
-        self._preview_plan = (cols, rows, cell_ar, slots, used, mixed, photos, target_ar)
-        win = getattr(self, "_preview_win", None)
-        if win is None or not win.winfo_exists():
-            win = tk.Toplevel(self)
-            win.title("Grid structure preview")
-            win.geometry("780x580")
-            self._preview_win = win
-            ctl = ttk.Frame(win); ctl.pack(fill="x", padx=8, pady=(8, 0))
-            ttk.Label(ctl, text="Preview border width (px):").pack(side="left")
-            if not hasattr(self, "_preview_border_var"):
-                self._preview_border_var = tk.IntVar(value=1)
-            ttk.Spinbox(ctl, from_=0, to=40, width=5, textvariable=self._preview_border_var,
-                        command=self._render_preview_cv).pack(side="left", padx=6)
-            self._preview_border_var.trace_add(
-                "write", lambda *_a: self._render_preview_cv())
-            self._preview_cv = tk.Canvas(win, bg="#f7f7f7", highlightthickness=0)
-            self._preview_cv.pack(fill="both", expand=True)
-            self._preview_info = ttk.Label(win, text="", anchor="w")
-            self._preview_info.pack(fill="x", padx=8, pady=4)
-            self._preview_cv.bind("<Configure>", lambda _e: self._render_preview_cv())
-        win.deiconify()
-        win.lift()
+        self._preview_plan = (cols, rows, cell_ar, cells, used, mode, photos, target_ar)
         self._render_preview_cv()
 
     def _render_preview_cv(self):
         """Draw the grid structure into one PIL image (fast for any cell count)."""
         cv = getattr(self, "_preview_cv", None)
-        plan = getattr(self, "_preview_plan", None)
-        if cv is None or plan is None:
+        if cv is None:
             return
-        cols, rows, cell_ar, slots, used, mixed, photos, target_ar = plan
+        plan = getattr(self, "_preview_plan", None)
+        if plan is None:
+            cv.delete("all")
+            cv.create_text(max(cv.winfo_width(), 200) / 2, max(cv.winfo_height(), 120) / 2,
+                           text="Scan folders and pick options to preview",
+                           fill="#888")
+            if hasattr(self, "_preview_info"):
+                self._preview_info.config(text="")
+            return
+        cols, rows, cell_ar, cells, used, mode, photos, target_ar = plan
         cv.delete("all")
         W = max(cv.winfo_width(), 320)
         H = max(cv.winfo_height(), 200)
@@ -661,20 +782,28 @@ class App(_BaseTk):
         land, port = (127, 179, 255), (134, 214, 160)
         img = Image.new("RGB", (max(1, gw), max(1, gh)), BLACK)
         d = ImageDraw.Draw(img)
-        n = min(used, cols * rows, len(slots))
+        n = min(used, cols * rows, len(cells))
         for k in range(n):
             r, c = divmod(k, cols)
             x = gap + c * (cw + gap)
             y = gap + r * (ch + gap)
-            if slots[k][0] == "L" or cw - gap < 2:
-                d.rectangle([x, y, x + cw - 1, y + ch - 1],
-                            fill=land if slots[k][0] == "L" else port)
+            cell = cells[k]
+            if mode == "mixed":
+                t = len(cell[1])
+                is_port = (cell[0] == "V")
             else:
-                half = max(1, (cw - gap) // 2)
-                d.rectangle([x, y, x + half - 1, y + ch - 1], fill=port)
-                rx = x + half + gap
-                if rx <= x + cw - 1:
-                    d.rectangle([rx, y, x + cw - 1, y + ch - 1], fill=port)
+                t = 1 if cell[0] == "L" else 2
+                is_port = (cell[0] == "P")
+            color = port if is_port else land
+            if t <= 1 or cw - (t - 1) * gap < 2 * t:
+                d.rectangle([x, y, x + cw - 1, y + ch - 1], fill=color)
+            else:
+                base = max(1, (cw - (t - 1) * gap) // t)
+                tx = x
+                for i in range(t):
+                    tw = base if i < t - 1 else (x + cw - tx)
+                    d.rectangle([tx, y, tx + tw - 1, y + ch - 1], fill=color)
+                    tx += tw + gap
 
         # Safety: never exceed the visible canvas.
         if img.width > availw or img.height > availh:
@@ -683,18 +812,22 @@ class App(_BaseTk):
         cv.create_image(W / 2, H / 2, image=self._preview_img)
         self._preview_info.config(
             text="Grid %dx%d = %d photos%s   |   target aspect %.3f   |   preview border %d px (black)"
-            % (cols, rows, photos, " (mixed)" if mixed else "", target_ar, gap))
+            % (cols, rows, photos, " (mixed)" if mode == "mixed" else "", target_ar, gap))
 
     # --------------------------------------------------------------- generate
     def start_generate(self):
-        if not self.matching:
-            messagebox.showwarning("Not scanned", "Scan folders and pick a ratio first.")
+        if not self.photos:
+            messagebox.showwarning("Not scanned", "Scan folders first.")
             return
         res = self._compute_layout()
         if not res:
-            messagebox.showwarning("Bad input", "Check the ratio, photo count and width.")
+            messagebox.showwarning(
+                "Bad input",
+                "Nothing to generate. In Mixed mode, check the base ratio A / r are "
+                "valid and that at least one folder has >= 15 usable images. "
+                "Otherwise check the ratio, photo count and width.")
             return
-        cols, rows, used, target_ar, cell_ar, _mixed, _photos, slots = res
+        cols, rows, used, target_ar, cell_ar, mode, _photos, cells = res
         ext = ".jpg" if self.format_var.get() == "JPEG" else ".png"
         out_path = filedialog.asksaveasfilename(
             title="Save grid as", defaultextension=ext,
@@ -706,16 +839,19 @@ class App(_BaseTk):
         fit = bool(self.fit_exact_var.get())
         self.generate_btn.config(state="disabled")
         threading.Thread(target=self._generate_worker,
-                         args=(cols, rows, cell_ar, slots[:used], out_path,
+                         args=(cols, rows, cell_ar, mode, cells[:used], out_path,
                                fit, grid_w, target_ar), daemon=True).start()
 
-    def _generate_worker(self, cols, rows, cell_ar, slots, out_path,
+    def _generate_worker(self, cols, rows, cell_ar, mode, cells, out_path,
                          fit=False, target_w=0, target_ar=1.5):
         try:
             bw = max(0, self._int(self.border_var, 0))
             grid_w = max(cols + (cols + 1) * bw, self._int(self.width_var, 6000))
             cw, ch = core.cell_size_from_width(grid_w, cols, cell_ar, bw)
-            photos = core.count_photos_in_slots(slots)
+            if mode == "mixed":
+                photos = core.count_photos_in_groups(cells)
+            else:
+                photos = core.count_photos_in_slots(cells)
 
             self.log("Compositing %dx%d grid (%d photos), cell %dx%d px, %d workers..."
                      % (cols, rows, photos, cw, ch, self.workers()))
@@ -723,9 +859,14 @@ class App(_BaseTk):
             def prog(i, total):
                 self.post(lambda: self.progress.config(maximum=total, value=i))
 
-            img = core.build_slots_image(slots, cols, rows, cw, ch,
-                                         border=bw, border_color=self.border_color,
-                                         progress=prog, workers=self.workers())
+            if mode == "mixed":
+                img = core.build_mixed_image(cells, cols, rows, cw, ch,
+                                             border=bw, border_color=self.border_color,
+                                             progress=prog, workers=self.workers())
+            else:
+                img = core.build_slots_image(cells, cols, rows, cw, ch,
+                                             border=bw, border_color=self.border_color,
+                                             progress=prog, workers=self.workers())
             if fit:
                 img = core.fit_exact(img, target_w, target_ar)
                 self.log("Fitted exactly to %dx%d px" % img.size)

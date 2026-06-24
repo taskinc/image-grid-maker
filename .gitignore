@@ -23,3 +23,6 @@ Thumbs.db
 *.exe
 secreen_shot.JPG
 _t.txt
+
+# demo/sample renders (not part of the repo)
+assets/sample_*.jpg
