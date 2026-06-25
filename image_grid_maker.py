@@ -90,6 +90,13 @@ class App(_BaseTk):
     def __init__(self):
         super().__init__()
         self.title("Image Grid Maker")
+        try:
+            _ico = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "imagegridmaker.ico")
+            if os.path.exists(_ico):
+                self.iconbitmap(_ico)
+        except Exception:
+            pass
         self.geometry("1340x880")
         self.minsize(1080, 640)
 
