@@ -20,6 +20,7 @@ Requires: Python 3.8+, Pillow, tkinterdnd2 (for drag-and-drop).
 import os
 import sys
 import time
+import zlib
 import threading
 import traceback
 import multiprocessing
@@ -64,8 +65,15 @@ HELP = {
               "Scan colours computes each set's average colour (used to fill the "
               "preview tiles and to order by colour/brightness). Choose 'All photos' "
               "or 'Sample N' (N photos per set, evenly spaced) for speed. Until you "
-              "scan, preview tiles use defaults: landscape 25,25,25 and portrait "
-              "125,125,125."),
+              "scan, preview tiles use defaults: landscape 225,225,225 and portrait "
+              "175,175,175.\n\n"
+              "Noise (Colour/Brightness only): instead of a plain dark-to-light "
+              "sort, arrange the sets along a pattern. Mode 'Wave' is a sine wave "
+              "(freq = number of cycles across the grid); 'Value noise' makes smooth "
+              "organic clusters (freq = pattern scale); 'Jitter' loosely sorts with "
+              "random nudges (amp = how scrambled). amp 0-1 blends pure sort (0) with "
+              "the full pattern (1); phase shifts it; Reseed re-rolls value-noise / "
+              "jitter."),
     "scan": ("Reads every image to get its pixel size, capture date (EXIF) and "
              "aspect ratio. Run this after choosing folders — the results feed "
              "all the options below."),
@@ -135,6 +143,7 @@ class App(_BaseTk):
         self.border_color = "#000000"
         self._order_seed = 0
         self.set_colors = {}          # folder key -> (r, g, b); empty until scanned
+        self._noise_seed = 0
 
         self._build_ui()
 
@@ -228,6 +237,40 @@ class App(_BaseTk):
         ttk.Label(o2, text="per set").pack(side="left", padx=(2, 8))
         ttk.Radiobutton(o2, text="All photos", variable=self.color_sample_mode,
                         value="all").pack(side="left")
+
+        o3 = ttk.Frame(of); o3.pack(fill="x", padx=6, pady=(2, 0))
+        self.noise_var = tk.BooleanVar(value=False)
+        self.noise_check = ttk.Checkbutton(o3, text="Noise", variable=self.noise_var,
+                                           command=self._on_noise_change)
+        self.noise_check.pack(side="left")
+        self.noise_mode_var = tk.StringVar(value="Wave")
+        self.noise_mode_combo = ttk.Combobox(
+            o3, textvariable=self.noise_mode_var, width=11, state="readonly",
+            values=["Wave", "Value noise", "Jitter"])
+        self.noise_mode_combo.pack(side="left", padx=4)
+        self.noise_mode_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_noise_change())
+
+        def _nfield(lbl, var, w=5):
+            ttk.Label(o3, text=lbl).pack(side="left", padx=(8, 1))
+            e = ttk.Entry(o3, textvariable=var, width=w)
+            e.pack(side="left")
+            e.bind("<KeyRelease>", lambda _e: self._on_noise_change())
+            return e
+
+        self.noise_freq_var = tk.StringVar(value="3")
+        self.noise_amp_var = tk.StringVar(value="1.0")
+        self.noise_phase_var = tk.StringVar(value="0")
+        self._noise_widgets = [
+            self.noise_mode_combo,
+            _nfield("freq", self.noise_freq_var),
+            _nfield("amp", self.noise_amp_var),
+            _nfield("phase", self.noise_phase_var),
+        ]
+        self.noise_reseed_btn = ttk.Button(o3, text="Reseed", width=8,
+                                           command=self._reseed_noise)
+        self.noise_reseed_btn.pack(side="left", padx=6)
+        self._noise_widgets.append(self.noise_reseed_btn)
+
         self.color_status = ttk.Label(of, text="Colours not scanned (using defaults).",
                                       foreground="#666")
         self.color_status.pack(anchor="w", padx=8, pady=(0, 4))
@@ -397,6 +440,7 @@ class App(_BaseTk):
         self._toggle_quality()
         self._toggle_use_all()
         self._update_mixed_enabled()
+        self._update_noise_enabled()
 
         # Drag-and-drop registration.
         if TkinterDnD is not None:
@@ -507,9 +551,54 @@ class App(_BaseTk):
             self.folder_list.insert("end", f)
 
     def _set_sort_key(self, folder, mode):
-        key = os.path.normcase(os.path.abspath(folder))
-        rgb = self.set_colors.get(key, (0, 0, 0))
-        return core.color_sort_key(rgb, mode)
+        return core.color_sort_key(self._set_rgb(folder), mode)
+
+    def _set_rgb(self, folder):
+        return self.set_colors.get(os.path.normcase(os.path.abspath(folder)), (0, 0, 0))
+
+    # ----- noise parameters -----
+    def _noise_mode(self):
+        return {"Wave": "wave", "Value noise": "field",
+                "Jitter": "jitter"}.get(self.noise_mode_var.get(), "wave")
+
+    def _noise_freq(self):
+        try:
+            return max(0.1, float(self.noise_freq_var.get()))
+        except ValueError:
+            return 3.0
+
+    def _noise_amp(self):
+        try:
+            return min(1.0, max(0.0, float(self.noise_amp_var.get())))
+        except ValueError:
+            return 1.0
+
+    def _noise_phase(self):
+        try:
+            return float(self.noise_phase_var.get())
+        except ValueError:
+            return 0.0
+
+    def _on_noise_change(self):
+        self._update_noise_enabled()
+        self._apply_folder_order()
+
+    def _reseed_noise(self):
+        self._noise_seed = random.randint(0, 10 ** 9)
+        self._apply_folder_order()
+
+    def _update_noise_enabled(self):
+        """Noise only affects Colour/Brightness ordering, and needs scanned colours."""
+        if not hasattr(self, "noise_check"):
+            return
+        active = self._order_by() in ("color", "brightness") and bool(self.set_colors)
+        self.noise_check.config(state="normal" if active else "disabled")
+        on = active and self.noise_var.get()
+        for w in self._noise_widgets:
+            if isinstance(w, ttk.Combobox):
+                w.config(state="readonly" if on else "disabled")
+            else:
+                w.config(state="normal" if on else "disabled")
 
     def _apply_folder_order(self):
         by = self._order_by()
@@ -519,7 +608,15 @@ class App(_BaseTk):
                                 "Click 'Scan colours' first.")
             self.order_by_var.set("Name")
             by = "name"
-        if by == "created":
+        if by in ("color", "brightness") and self.noise_var.get():
+            vals = [core.color_sort_key(self._set_rgb(f), by)[0] for f in self.folders]
+            ids = [zlib.crc32(os.path.normcase(os.path.abspath(f)).encode()) & 0xffffffff
+                   for f in self.folders]
+            order = core.noisy_order(vals, self._noise_mode(), self._noise_freq(),
+                                     self._noise_amp(), self._noise_seed,
+                                     self._noise_phase(), ids=ids)
+            self.folders = [self.folders[i] for i in order]
+        elif by == "created":
             self.folders.sort(key=lambda f: self._ctime(f))
         elif by in ("color", "brightness"):
             self.folders.sort(key=lambda f: self._set_sort_key(f, by))
@@ -528,6 +625,7 @@ class App(_BaseTk):
         if self._order_desc():
             self.folders.reverse()
         self._populate_folder_list()
+        self._update_noise_enabled()
         if self.photos:
             self.refresh_selection()
         else:
@@ -635,6 +733,7 @@ class App(_BaseTk):
         self.color_status.config(
             text="Colours scanned for %d set(s)." % len(self.set_colors),
             foreground="#080")
+        self._update_noise_enabled()
         self.preview_layout()   # re-render preview tiles with real set colours
 
     def _scan_worker(self):
@@ -922,7 +1021,7 @@ class App(_BaseTk):
             if ck in self.set_colors:
                 color = self.set_colors[ck]
             else:
-                color = (125, 125, 125) if is_port else (25, 25, 25)
+                color = (175, 175, 175) if is_port else (225, 225, 225)
             if t <= 1 or cw - (t - 1) * gap < 2 * t:
                 d.rectangle([x, y, x + cw - 1, y + ch - 1], fill=color)
             else:
@@ -939,7 +1038,7 @@ class App(_BaseTk):
         self._preview_img = ImageTk.PhotoImage(img)   # keep a reference
         cv.create_image(W / 2, H / 2, image=self._preview_img)
         col_note = ("set colours" if self.set_colors
-                    else "default colours (25/25/25 land, 125/125/125 port)")
+                    else "default colours (225/225/225 land, 175/175/175 port)")
         self._preview_info.config(
             text="Grid %dx%d = %d photos%s   |   target aspect %.3f   |   border %d px   |   %s"
             % (cols, rows, photos, " (mixed)" if mode == "mixed" else "", target_ar,

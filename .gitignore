@@ -12,6 +12,9 @@ dist/
 build_exe.bat
 push_to_github.bat
 
+# scratch
+_synced_probe.txt
+
 # OS / editor
 .DS_Store
 Thumbs.db

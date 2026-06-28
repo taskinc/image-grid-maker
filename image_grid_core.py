@@ -323,6 +323,73 @@ def color_sort_key(rgb, by="brightness"):
 
 
 # ----------------------------------------------------------------------------
+# Noise ordering (arrange sets by a wave / noise along the sequence)
+# ----------------------------------------------------------------------------
+
+def _hash01(i, seed):
+    """Deterministic pseudo-random float in [0, 1) from an integer and a seed."""
+    h = (int(i) * 374761393 + int(seed) * 668265263) & 0xFFFFFFFF
+    h = (h ^ (h >> 13)) * 1274126177 & 0xFFFFFFFF
+    h ^= (h >> 16)
+    return (h & 0xFFFFFFFF) / 4294967296.0
+
+
+def _value_noise_1d(x, seed):
+    """Smooth 1-D value noise in [0, 1): random lattice values, smoothstep lerp."""
+    x0 = math.floor(x)
+    t = x - x0
+    t = t * t * (3 - 2 * t)
+    a = _hash01(x0, seed)
+    b = _hash01(x0 + 1, seed)
+    return a + t * (b - a)
+
+
+def noisy_order(values, mode="wave", freq=3.0, amp=1.0, seed=0, phase=0.0, ids=None):
+    """Permutation (indices into `values`) that arranges items so their scalar
+    `values` follow a pattern along the output sequence.
+
+    mode:
+      'wave'   - sine wave; `freq` = number of cycles across the sequence.
+      'field'  - smooth 1-D value noise; `freq` = pattern scale (blobs).
+      'jitter' - sort by value, then randomly nudge; `amp` = how scrambled.
+    `amp` in [0, 1] blends a pure value-sort (0) with the full pattern (1).
+    `phase` shifts the wave/noise; `seed` re-rolls value-noise / jitter.
+    `ids` (optional) gives a stable per-item id so jitter is independent of the
+    incoming order; defaults to the item index.
+    """
+    n = len(values)
+    if n <= 1:
+        return list(range(n))
+    amp = max(0.0, min(1.0, float(amp)))
+    if ids is None:
+        ids = [i + 1 for i in range(n)]
+
+    if mode == "jitter":
+        order = sorted(range(n), key=lambda i: values[i])
+        norm = [0.0] * n
+        for rank, i in enumerate(order):
+            norm[i] = rank / (n - 1)
+        key = [(1 - amp) * norm[i] + amp * _hash01(ids[i], seed) for i in range(n)]
+        return sorted(range(n), key=lambda i: key[i])
+
+    # wave / field: match the value-sorted items onto a target curve by rank.
+    sorted_idx = sorted(range(n), key=lambda i: values[i])  # low value -> high
+    targets = []
+    for p in range(n):
+        ramp = p / (n - 1)
+        if mode == "field":
+            w = _value_noise_1d(freq * p / n + phase, seed)
+        else:  # wave
+            w = 0.5 + 0.5 * math.sin(2 * math.pi * freq * p / n + phase)
+        targets.append((1 - amp) * ramp + amp * w)
+    pos_by_target = sorted(range(n), key=lambda p: targets[p])
+    result = [0] * n
+    for rank, p in enumerate(pos_by_target):
+        result[p] = sorted_idx[rank]
+    return result
+
+
+# ----------------------------------------------------------------------------
 # Aspect ratios
 # ----------------------------------------------------------------------------
 
