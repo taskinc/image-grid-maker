@@ -8,6 +8,7 @@ multiprocessing workers. Requires: Pillow.
 import os
 import math
 import random
+import colorsys
 from datetime import datetime
 from collections import Counter
 from fractions import Fraction
@@ -232,6 +233,93 @@ def order_by_folder_list(photos, folders):
         r = rank.get(os.path.normcase(os.path.abspath(p.folder)), big)
         return (r,) + p.within_folder_key()
     return sorted(photos, key=key)
+
+
+# ----------------------------------------------------------------------------
+# Set colours (average colour per set, for ordering + preview)
+# ----------------------------------------------------------------------------
+
+def _photo_avg(path):
+    """Average RGB of one image, decoded tiny for speed/memory. None on failure."""
+    try:
+        with Image.open(path) as im:
+            try:
+                im.draft("RGB", (32, 32))
+            except Exception:
+                pass
+            im = im.convert("RGB").resize((1, 1), Image.LANCZOS)
+            return im.getpixel((0, 0))
+    except Exception:
+        return None
+
+
+def _even_sample(photos, sample):
+    """Up to `sample` photos, evenly spaced. sample=None -> all photos."""
+    n = len(photos)
+    if sample is None or sample >= n:
+        return list(photos)
+    if sample <= 0:
+        return []
+    step = n / sample
+    return [photos[int(i * step)] for i in range(sample)]
+
+
+def scan_set_colors(sets, sample=None, progress=None, workers=None):
+    """Average colour per set.
+
+    sets: list of (key, [Photo]). For each set the photos are ordered by Date
+    Taken/name, then `sample` of them are taken evenly spaced (sample=None ->
+    all photos) and averaged. Returns {key: (r, g, b)}.
+    """
+    tasks = []          # flat (key, path) list, preserves order for ex.map
+    for key, photos in sets:
+        ordered = sorted(photos, key=lambda p: p.within_folder_key())
+        for p in _even_sample(ordered, sample):
+            tasks.append((key, p.path))
+    total = len(tasks)
+    sums = {}           # key -> [r, g, b, count]
+
+    def _acc(key, c):
+        if c is None:
+            return
+        s = sums.setdefault(key, [0, 0, 0, 0])
+        s[0] += c[0]; s[1] += c[1]; s[2] += c[2]; s[3] += 1
+
+    if workers is None:
+        workers = n_workers()
+    paths = [t[1] for t in tasks]
+
+    if total == 0:
+        return {}
+    if workers <= 1 or total < PARALLEL_THRESHOLD:
+        for i, (key, path) in enumerate(tasks):
+            _acc(key, _photo_avg(path))
+            if progress and (i % 25 == 0 or i == total - 1):
+                progress(i + 1, total)
+    else:
+        chunk = max(1, total // (workers * 8))
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            for i, c in enumerate(ex.map(_photo_avg, paths, chunksize=chunk)):
+                _acc(tasks[i][0], c)
+                if progress and (i % 25 == 0 or i == total - 1):
+                    progress(i + 1, total)
+
+    out = {}
+    for key, s in sums.items():
+        if s[3] > 0:
+            out[key] = (round(s[0] / s[3]), round(s[1] / s[3]), round(s[2] / s[3]))
+    return out
+
+
+def color_sort_key(rgb, by="brightness"):
+    """Sort key for an (r, g, b) set colour.
+    by='color' -> hue, then saturation, then value (rainbow-ish ordering).
+    by='brightness' -> perceived luminance (Rec. 601)."""
+    r, g, b = (c / 255.0 for c in rgb)
+    if by == "color":
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        return (h, s, v)
+    return (0.299 * r + 0.587 * g + 0.114 * b,)
 
 
 # ----------------------------------------------------------------------------

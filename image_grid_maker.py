@@ -18,6 +18,7 @@ Requires: Python 3.8+, Pillow, tkinterdnd2 (for drag-and-drop).
 """
 
 import os
+import sys
 import time
 import threading
 import traceback
@@ -39,16 +40,32 @@ except Exception:  # pragma: no cover
 _BaseTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
 
 APP_NAME = "Image Grid Maker"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 AUTHOR = "cagri taskin"
 GITHUB_URL = "https://github.com/taskinc/image-grid-maker"
+ICON_FILE = "imagegridmaker.ico"
+
+
+def _resource_path(name):
+    """Path to a bundled resource, both from source and inside a PyInstaller build."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
 
 HELP = {
     "folders": ("Add the folders that hold your photos (or drag them in). With "
                 "'Expand sub-folders' on, every nested folder that contains images "
-                "is listed separately, as if you added each one. 'Order folders by' "
-                "re-sequences the whole list by name, folder creation date, or "
-                "random (pick Random again to reshuffle); the grid follows this order."),
+                "is listed separately, as if you added each one. Each folder is one "
+                "'set'; use 'Order sets' (next to the preview) to re-sequence them."),
+    "order": ("Re-sequence the sets (folders) shown in the grid. Order by Name, "
+              "folder creation Date, and Ascending/Descending. 'Randomise' shuffles "
+              "them. After 'Scan colours', you can also order by Colour (hue) or "
+              "Brightness. The order inside each set never changes (Date Taken, then "
+              "name).\n\n"
+              "Scan colours computes each set's average colour (used to fill the "
+              "preview tiles and to order by colour/brightness). Choose 'All photos' "
+              "or 'Sample N' (N photos per set, evenly spaced) for speed. Until you "
+              "scan, preview tiles use defaults: landscape 25,25,25 and portrait "
+              "125,125,125."),
     "scan": ("Reads every image to get its pixel size, capture date (EXIF) and "
              "aspect ratio. Run this after choosing folders — the results feed "
              "all the options below."),
@@ -88,13 +105,19 @@ HELP = {
 
 class App(_BaseTk):
     def __init__(self):
+        # Windows: make the taskbar use our icon, not the Python/Tk default.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "cagritaskin.imagegridmaker")
+        except Exception:
+            pass
         super().__init__()
         self.title("Image Grid Maker")
         try:
-            _ico = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "imagegridmaker.ico")
-            if os.path.exists(_ico):
-                self.iconbitmap(_ico)
+            ico = _resource_path(ICON_FILE)
+            if os.path.exists(ico):
+                self.iconbitmap(default=ico)
         except Exception:
             pass
         self.geometry("1340x880")
@@ -111,6 +134,7 @@ class App(_BaseTk):
         self.crop_label_to_bucket = {}
         self.border_color = "#000000"
         self._order_seed = 0
+        self.set_colors = {}          # folder key -> (r, g, b); empty until scanned
 
         self._build_ui()
 
@@ -177,9 +201,39 @@ class App(_BaseTk):
         canvas.bind("<MouseWheel>", _wheel)
         root.bind("<MouseWheel>", _wheel)
 
-        # ----- RIGHT: live structure preview (always on) -----
+        # ----- RIGHT: Order sets + colours, then live preview (always on) -----
+        of = self._group(right, "Order sets", "order")
+        o1 = ttk.Frame(of); o1.pack(fill="x", padx=6, pady=(6, 2))
+        ttk.Label(o1, text="Order by:").pack(side="left")
+        self.order_by_var = tk.StringVar(value="Name")
+        self.order_by_combo = ttk.Combobox(
+            o1, textvariable=self.order_by_var, width=12, state="readonly",
+            values=["Name", "Date created"])
+        self.order_by_combo.pack(side="left", padx=6)
+        self.order_by_combo.bind("<<ComboboxSelected>>", lambda _e: self._apply_folder_order())
+        self.order_dir_var = tk.StringVar(value="Ascending")
+        od = ttk.Combobox(o1, textvariable=self.order_dir_var, width=11, state="readonly",
+                          values=["Ascending", "Descending"])
+        od.pack(side="left", padx=6)
+        od.bind("<<ComboboxSelected>>", lambda _e: self._apply_folder_order())
+        ttk.Button(o1, text="Randomise", command=self.randomize_order).pack(side="left", padx=6)
+
+        o2 = ttk.Frame(of); o2.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Button(o2, text="Scan colours", command=self.start_color_scan).pack(side="left")
+        self.color_sample_mode = tk.StringVar(value="sample")
+        ttk.Radiobutton(o2, text="Sample", variable=self.color_sample_mode,
+                        value="sample").pack(side="left", padx=(10, 2))
+        self.color_sample_n = tk.StringVar(value="20")
+        ttk.Entry(o2, textvariable=self.color_sample_n, width=6).pack(side="left")
+        ttk.Label(o2, text="per set").pack(side="left", padx=(2, 8))
+        ttk.Radiobutton(o2, text="All photos", variable=self.color_sample_mode,
+                        value="all").pack(side="left")
+        self.color_status = ttk.Label(of, text="Colours not scanned (using defaults).",
+                                      foreground="#666")
+        self.color_status.pack(anchor="w", padx=8, pady=(0, 4))
+
         ph = ttk.Frame(right); ph.pack(fill="x", padx=8, pady=(8, 0))
-        ttk.Label(ph, text="Live preview (grid structure)").pack(side="left")
+        ttk.Label(ph, text="Live preview (set colours)").pack(side="left")
         ttk.Label(ph, text="border px:").pack(side="left", padx=(12, 2))
         self._preview_border_var = tk.IntVar(value=1)
         ttk.Spinbox(ph, from_=0, to=40, width=5, textvariable=self._preview_border_var,
@@ -204,18 +258,6 @@ class App(_BaseTk):
         self.expand_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(b, text="Expand sub-folders",
                         variable=self.expand_var).pack(fill="x", pady=2)
-        ordr = ttk.Frame(f1); ordr.pack(fill="x", padx=8, pady=(0, 2))
-        ttk.Label(ordr, text="Order folders by:").pack(side="left")
-        self.order_by_var = tk.StringVar(value="Name")
-        ob = ttk.Combobox(ordr, textvariable=self.order_by_var, width=14, state="readonly",
-                          values=["Name", "Date created", "Random"])
-        ob.pack(side="left", padx=6)
-        ob.bind("<<ComboboxSelected>>", lambda _e: self._apply_folder_order())
-        self.order_dir_var = tk.StringVar(value="Ascending")
-        od = ttk.Combobox(ordr, textvariable=self.order_dir_var, width=12, state="readonly",
-                          values=["Ascending", "Descending"])
-        od.pack(side="left", padx=6)
-        od.bind("<<ComboboxSelected>>", lambda _e: self._apply_folder_order())
         hint = "Tip: drag folders from your file explorer onto this window."
         if TkinterDnD is None:
             hint = "(Install 'tkinterdnd2' to enable drag-and-drop of folders.)"
@@ -464,13 +506,23 @@ class App(_BaseTk):
         for f in self.folders:
             self.folder_list.insert("end", f)
 
+    def _set_sort_key(self, folder, mode):
+        key = os.path.normcase(os.path.abspath(folder))
+        rgb = self.set_colors.get(key, (0, 0, 0))
+        return core.color_sort_key(rgb, mode)
+
     def _apply_folder_order(self):
         by = self._order_by()
+        if by in ("color", "brightness") and not self.set_colors:
+            messagebox.showinfo("Scan colours first",
+                                "Order by colour/brightness needs set colours. "
+                                "Click 'Scan colours' first.")
+            self.order_by_var.set("Name")
+            by = "name"
         if by == "created":
             self.folders.sort(key=lambda f: self._ctime(f))
-        elif by == "random":
-            self._order_seed = random.randint(0, 10 ** 9)
-            random.Random(self._order_seed).shuffle(self.folders)
+        elif by in ("color", "brightness"):
+            self.folders.sort(key=lambda f: self._set_sort_key(f, by))
         else:
             self.folders.sort(key=lambda f: f.lower())
         if self._order_desc():
@@ -478,6 +530,17 @@ class App(_BaseTk):
         self._populate_folder_list()
         if self.photos:
             self.refresh_selection()
+        else:
+            self.preview_layout()
+
+    def randomize_order(self):
+        self._order_seed = random.randint(0, 10 ** 9)
+        random.Random(self._order_seed).shuffle(self.folders)
+        self._populate_folder_list()
+        if self.photos:
+            self.refresh_selection()
+        else:
+            self.preview_layout()
 
     def add_folder(self):
         d = filedialog.askdirectory(title="Select a source folder")
@@ -519,8 +582,60 @@ class App(_BaseTk):
         if not self.folders:
             messagebox.showwarning("No folders", "Add at least one source folder first.")
             return
+        # A fresh metadata scan invalidates any previously scanned set colours.
+        self.set_colors = {}
+        if hasattr(self, "order_by_combo"):
+            self.order_by_combo.config(values=["Name", "Date created"])
+            if self._order_by() in ("color", "brightness"):
+                self.order_by_var.set("Name")
+            self.color_status.config(text="Colours not scanned (using defaults).",
+                                     foreground="#666")
         self.generate_btn.config(state="disabled")
         threading.Thread(target=self._scan_worker, daemon=True).start()
+
+    # --------------------------------------------------------------- colours
+    def start_color_scan(self):
+        if not self.photos:
+            messagebox.showwarning("Not scanned", "Scan folders first.")
+            return
+        threading.Thread(target=self._color_worker, daemon=True).start()
+
+    def _color_worker(self):
+        try:
+            by_folder = {}
+            for p in self.photos:
+                by_folder.setdefault(
+                    os.path.normcase(os.path.abspath(p.folder)), []).append(p)
+            sets = list(by_folder.items())
+            if self.color_sample_mode.get() == "all":
+                sample, how = None, "all photos"
+            else:
+                sample = max(1, self._int(self.color_sample_n, 20))
+                how = "sample %d/set" % sample
+            self.log("Scanning set colours (%s) over %d set(s)..." % (how, len(sets)))
+
+            def prog(i, total):
+                self.post(lambda: self.progress.config(maximum=total, value=i))
+
+            colors = core.scan_set_colors(sets, sample=sample, progress=prog,
+                                          workers=self.workers())
+            self.set_colors = colors
+            self.log("Set colours ready for %d set(s)." % len(colors))
+            self.post(self._on_colors_scanned)
+        except Exception as exc:
+            self.log("Colour scan failed: %s" % exc)
+            msg = "%s\n\n%s" % (exc, traceback.format_exc())
+            self.post(lambda: messagebox.showerror("Colour scan error", msg))
+        finally:
+            self.post(lambda: self.progress.config(value=0))
+
+    def _on_colors_scanned(self):
+        self.order_by_combo.config(
+            values=["Name", "Date created", "Colour", "Brightness"])
+        self.color_status.config(
+            text="Colours scanned for %d set(s)." % len(self.set_colors),
+            foreground="#080")
+        self.preview_layout()   # re-render preview tiles with real set colours
 
     def _scan_worker(self):
         try:
@@ -629,7 +744,8 @@ class App(_BaseTk):
     # --------------------------------------------------------------- layout
     def _order_by(self):
         return {"Name": "name", "Date created": "created",
-                "Random": "random"}.get(self.order_by_var.get(), "name")
+                "Colour": "color", "Brightness": "brightness"}.get(
+                    self.order_by_var.get(), "name")
 
     def _order_desc(self):
         return self.order_dir_var.get() == "Descending"
@@ -786,7 +902,6 @@ class App(_BaseTk):
         gh = rows * ch + (rows + 1) * gap
 
         BLACK = (0, 0, 0)
-        land, port = (127, 179, 255), (134, 214, 160)
         img = Image.new("RGB", (max(1, gw), max(1, gh)), BLACK)
         d = ImageDraw.Draw(img)
         n = min(used, cols * rows, len(cells))
@@ -798,10 +913,16 @@ class App(_BaseTk):
             if mode == "mixed":
                 t = len(cell[1])
                 is_port = (cell[0] == "V")
+                folder = cell[1][0].folder
             else:
                 t = 1 if cell[0] == "L" else 2
                 is_port = (cell[0] == "P")
-            color = port if is_port else land
+                folder = cell[1].folder
+            ck = os.path.normcase(os.path.abspath(folder))
+            if ck in self.set_colors:
+                color = self.set_colors[ck]
+            else:
+                color = (125, 125, 125) if is_port else (25, 25, 25)
             if t <= 1 or cw - (t - 1) * gap < 2 * t:
                 d.rectangle([x, y, x + cw - 1, y + ch - 1], fill=color)
             else:
@@ -817,9 +938,12 @@ class App(_BaseTk):
             img.thumbnail((max(1, int(availw)), max(1, int(availh))))
         self._preview_img = ImageTk.PhotoImage(img)   # keep a reference
         cv.create_image(W / 2, H / 2, image=self._preview_img)
+        col_note = ("set colours" if self.set_colors
+                    else "default colours (25/25/25 land, 125/125/125 port)")
         self._preview_info.config(
-            text="Grid %dx%d = %d photos%s   |   target aspect %.3f   |   preview border %d px (black)"
-            % (cols, rows, photos, " (mixed)" if mode == "mixed" else "", target_ar, gap))
+            text="Grid %dx%d = %d photos%s   |   target aspect %.3f   |   border %d px   |   %s"
+            % (cols, rows, photos, " (mixed)" if mode == "mixed" else "", target_ar,
+               gap, col_note))
 
     # --------------------------------------------------------------- generate
     def start_generate(self):

@@ -3,7 +3,7 @@
 > Turn thousands of photos (e.g. photogrammetry captures) into a single, clean
 > grid image — always a perfect square or rectangle, no empty cells.
 
-![Version](https://img.shields.io/badge/version-1.0.2-blue)
+![Version](https://img.shields.io/badge/version-1.0.3-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -21,7 +21,8 @@ files) and does the tedious parts for you:
 - **Finds and groups by aspect ratio.** After scanning it lists every aspect
   ratio present with photo counts. You pick which to include; photos of other
   shapes are **centre-cropped** to a single cell ratio so the grid stays uniform.
-- **Smart ordering.** Photos are sorted by sub-folder, then by **Date Taken** (EXIF), falling back to file name. Sub-folders can be ordered by **name, creation date, or random**, ascending or descending.
+- **Smart ordering.** Photos are sorted by sub-folder, then by **Date Taken** (EXIF), falling back to file name (this order inside each set never changes). The **Order sets** panel (next to the preview) re-sequences the folders/sets by **name, creation date, colour (hue) or brightness**, ascending or descending, plus a **Randomise** button.
+- **Set colours.** **Scan colours** computes each set's average colour (over **all** photos or an **evenly-spaced sample of N** per set). The live preview fills each tile with its set's colour — a quick mosaic of the whole grid — and you can order sets by colour or brightness. Until scanned, tiles use defaults (landscape 25,25,25; portrait 125,125,125).
 - **Mixed orientation (set-based).** Combine landscape and portrait folders in one grid: each folder is a set classified by its dominant orientation, packed in equal-width groups (you pick the base ratio A and the portrait/landscape width ratio r = 1/2, 3/5 or 2/3). Always a perfect rectangle, in folder order.
 - **Pick how many and how.** Use the first *N* photos, or sample **evenly** across
   the whole set.
@@ -88,7 +89,7 @@ pyinstaller --clean --onefile --windowed --name ImageGridMaker ^
 7. **Border** — optional width (0 = none) and colour.
 8. **Performance** — the percentage of CPU cores to use.
 
-The **live preview pane** on the right shows the exact grid structure as you change options (drag the divider to resize it). Then click **Generate grid…**. Every group has a **?** button explaining its options, and the **Log** panel records each step.
+The **live preview pane** on the right shows the exact grid as you change options (drag the divider to resize it), with each tile filled by its set's colour. Use **Order sets** above it to re-sequence folders (by name, date, colour, brightness, or randomise) and **Scan colours** to compute set colours. Then click **Generate grid…**. Every group has a **?** button explaining its options, and the **Log** panel records each step.
 
 ---
 
@@ -111,6 +112,13 @@ python test_image_grid_core.py
 ---
 
 ## Version
+
+**1.0.3**
+
+- **Order sets** moved next to the live preview and renamed from "Order folders by". Order sets by name or creation date (ascending/descending); **Randomise** is now its own button.
+- New **Scan colours** computes each set's average colour, over **all** photos or an **evenly-spaced sample of N** per set, then lets you order sets by **Colour** (hue) or **Brightness**.
+- The live preview now fills each tile with its **set's average colour** (a mosaic of the grid). Scanned colours persist for the session; until you scan, tiles use defaults — landscape 25,25,25 and portrait 125,125,125.
+- The order inside each set is unchanged (Date Taken, then file name).
 
 **1.0.2**
 
