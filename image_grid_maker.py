@@ -250,11 +250,17 @@ class App(_BaseTk):
         self.noise_mode_combo.pack(side="left", padx=4)
         self.noise_mode_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_noise_change())
 
-        def _nfield(lbl, var, w=5):
+        def _nfield(lbl, var, from_, to, inc, w=5):
             ttk.Label(o3, text=lbl).pack(side="left", padx=(8, 1))
-            e = ttk.Entry(o3, textvariable=var, width=w)
+            e = ttk.Spinbox(
+                o3, textvariable=var, width=w,
+                from_=from_, to=to, increment=inc,
+                command=self._on_noise_change)
             e.pack(side="left")
+            # Typing still works; arrows/Up/Down update through the Spinbox command.
             e.bind("<KeyRelease>", lambda _e: self._on_noise_change())
+            e.bind("<FocusOut>", lambda _e: self._on_noise_change())
+            e.bind("<Return>", lambda _e: self._on_noise_change())
             return e
 
         self.noise_freq_var = tk.StringVar(value="3")
@@ -262,9 +268,9 @@ class App(_BaseTk):
         self.noise_phase_var = tk.StringVar(value="0")
         self._noise_widgets = [
             self.noise_mode_combo,
-            _nfield("freq", self.noise_freq_var),
-            _nfield("amp", self.noise_amp_var),
-            _nfield("phase", self.noise_phase_var),
+            _nfield("freq", self.noise_freq_var, 0.1, 1000.0, 1.0),
+            _nfield("amp", self.noise_amp_var, 0.0, 1000.0, 0.1),
+            _nfield("phase", self.noise_phase_var, -100000.0, 100000.0, 1.0),
         ]
         self.noise_reseed_btn = ttk.Button(o3, text="Reseed", width=8,
                                            command=self._reseed_noise)
