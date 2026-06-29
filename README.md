@@ -130,11 +130,11 @@ python mass_jpeg_resize.py "D:\photos_raw" "D:\photos_resized" 50 90 --workers 1
 
 Arguments:
 
-input_folder       Source folder containing JPEG files
-output_folder      Destination folder
-scale_percentage   Resize scale percentage, for example 50 means 50%
-jpeg_quality       JPEG quality from 1 to 100
---workers          Optional number of worker threads
+- input_folder       Source folder containing JPEG files
+- output_folder      Destination folder
+- scale_percentage   Resize scale percentage, for example 50 means 50%
+- jpeg_quality       JPEG quality from 1 to 100
+- --workers          Optional number of worker threads
 
 ---
 
