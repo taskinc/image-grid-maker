@@ -112,6 +112,32 @@ python test_image_grid_core.py
 
 ---
 
+## Tools
+
+### Mass JPEG Resize
+
+This repository also includes a small utility script for batch-resizing JPEG images.
+
+The script recursively scans an input folder, resizes all .jpg and .jpeg files, and saves them into an output folder while preserving the original subfolder structure.
+
+Usage:
+
+python mass_jpeg_resize.py input_folder output_folder scale_percentage jpeg_quality
+
+Example:
+
+python mass_jpeg_resize.py "D:\photos_raw" "D:\photos_resized" 50 90 --workers 16
+
+Arguments:
+
+input_folder       Source folder containing JPEG files
+output_folder      Destination folder
+scale_percentage   Resize scale percentage, for example 50 means 50%
+jpeg_quality       JPEG quality from 1 to 100
+--workers          Optional number of worker threads
+
+---
+
 ## Version
 
 **1.0.3**
