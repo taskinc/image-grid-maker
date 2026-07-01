@@ -3,7 +3,7 @@
 > Turn thousands of photos (e.g. photogrammetry captures) into a single, clean
 > grid image — always a perfect square or rectangle, no empty cells.
 
-![Version](https://img.shields.io/badge/version-1.0.3-blue)
+![Version](https://img.shields.io/badge/version-1.0.5-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -21,10 +21,10 @@ files) and does the tedious parts for you:
 - **Finds and groups by aspect ratio.** After scanning it lists every aspect
   ratio present with photo counts. You pick which to include; photos of other
   shapes are **centre-cropped** to a single cell ratio so the grid stays uniform.
-- **Smart ordering.** Photos are sorted by sub-folder, then by **Date Taken** (EXIF), falling back to file name (this order inside each set never changes). The **Order sets** panel (next to the preview) re-sequences the folders/sets by **name, creation date, colour (hue) or brightness**, ascending or descending, plus a **Randomise** button.
-- **Set colours.** **Scan colours** computes each set's average colour (over **all** photos or an **evenly-spaced sample of N** per set). The live preview fills each tile with its set's colour — a quick mosaic of the whole grid — and you can order sets by colour or brightness. Until scanned, tiles use defaults (landscape 225,225,225; portrait 175,175,175).
-- **Noise arrangement.** When ordering by colour or brightness, optionally lay the sets out along a pattern instead of a plain gradient: a **Wave** (frequency = cycles across the grid), a smooth **Value-noise** field (organic clusters), or random **Jitter** (loose sort). Amplitude blends pure-sort↔pattern; phase and a re-rollable seed give variations.
-- **Mixed orientation (set-based).** Combine landscape and portrait folders in one grid: each folder is a set classified by its dominant orientation, packed in equal-width groups (you pick the base ratio A and the portrait/landscape width ratio r = 1/2, 3/5 or 2/3). Always a perfect rectangle, in folder order.
+- **Order sets or photos.** The **Order** panel (next to the preview) re-sequences the grid by **name, date, colour, brightness or similarity**, ascending/descending, plus **Randomise**. Choose **Sets** (order whole sub-folders; order inside each set stays Date-Taken→name) or **Photos** (ignore folders and place every photo individually).
+- **Colours & perceptual similarity.** **Scan colours** reads a colour per set (**All** or an evenly-spaced **Sample of N**) or per photo, measured as the **Average** or the **Dominant** colour. Colour, Brightness and Similarity ordering use perceptual **CIELAB**; **Similarity** is a nearest-neighbour path so neighbouring tiles look alike. The live preview is a colour mosaic; until scanned, tiles use defaults (landscape 225,225,225; portrait 175,175,175).
+- **Reference-image ordering.** Load a grayscale image and the app arranges photos to match it — dark photos land in the dark areas (for Colour, warm reds go bright and cool blues go dark). **Stretch** or **Crop** it to the grid; in **Photos** mode it's a full 2-D placement, in **Sets** mode whole sets follow the image's top-to-bottom sweep. Ascending/Descending inverts it, and **View reference** shows it resampled onto the grid.
+- **Mixed orientation.** Combine landscape and portrait in one grid, packed in equal-width groups (base ratio A and width ratio r = 1/2, 3/5 or 2/3), always a perfect rectangle. Each folder is a set by dominant orientation, or tick **Use both orientations** to keep both (landscapes first, then portraits). In **Photos** order mode, folders are ignored — all photos are pooled by orientation and the group-cells are ordered by colour/brightness/similarity.
 - **Pick how many and how.** Use the first *N* photos, or sample **evenly** across
   the whole set.
 - **Exact grid, every time.** You give a target output aspect ratio (e.g. 16:9)
@@ -139,6 +139,22 @@ Arguments:
 ---
 
 ## Version
+
+**1.0.5**
+
+- **Reference-image ordering replaces procedural noise.** Load any grayscale image; the app matches photos/sets to it — dark photos to dark areas, and for Colour, warm→bright / cool→dark. Crop or stretch it to the grid; 2-D placement in Photos mode, a 1-D top-to-bottom sweep in Sets mode; Ascending/Descending inverts it.
+- **View reference** preview toggle (replaces View noise) shows the image resampled onto the grid.
+- All procedural noise controls (Wave / Value-noise / Jitter, frequency / amplitude / phase / seed) were removed.
+
+**1.0.4**
+
+- **Order sets *or* photos:** a new toggle places every photo individually (folders ignored) as well as the existing per-set ordering. In Photos mode every photo is scanned and the Sample control is greyed.
+- **Colour source & perceptual colour:** choose **Average** or **Dominant** colour; Colour/Brightness/Similarity ordering now use **CIELAB**.
+- **Similarity path:** a new order-by that greedily places each item next to its nearest colour neighbour, for smooth visual flow.
+- **View noise (B&W):** a preview toggle that shows the pattern the noise produces as a black-and-white texture.
+- **Aspect ratios:** **Select all / Select none** buttons.
+- **Mixed mode — use both orientations:** keep both landscapes and portraits from each folder (H-groups first, then V-groups); Mixed mode now also works in Photos order mode (pool by orientation, order group-cells by average colour/brightness/similarity).
+- Default colour-sample is now 10; preview defaults are landscape 225,225,225 / portrait 175,175,175.
 
 **1.0.3**
 

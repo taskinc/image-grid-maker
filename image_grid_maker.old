@@ -41,7 +41,7 @@ except Exception:  # pragma: no cover
 _BaseTk = TkinterDnD.Tk if TkinterDnD is not None else tk.Tk
 
 APP_NAME = "Image Grid Maker"
-VERSION = "1.0.5"
+VERSION = "1.0.3"
 AUTHOR = "cagri taskin"
 GITHUB_URL = "https://github.com/taskinc/image-grid-maker"
 ICON_FILE = "imagegridmaker.ico"
@@ -57,52 +57,42 @@ HELP = {
                 "'Expand sub-folders' on, every nested folder that contains images "
                 "is listed separately, as if you added each one. Each folder is one "
                 "'set'; use 'Order sets' (next to the preview) to re-sequence them."),
-    "order": ("Re-sequence the grid. 'Sets' orders whole sub-folders (each folder "
-              "is one set); 'Photos' ignores folders and places every photo "
-              "individually. Order by Name, Date, Ascending/Descending; 'Randomise' "
-              "shuffles. After 'Scan colours' you can also order by Colour, "
-              "Brightness or Similarity. In Sets mode the order inside each set "
-              "never changes (Date Taken, then name).\n\n"
-              "Scan colours reads a colour per set (or per photo in Photos mode). "
-              "'Average' vs 'Dominant' picks how each image's colour is measured "
-              "(dominant = most common colour, avoids muddy greys). In Sets mode you "
-              "can scan 'All' photos or a 'Sample' of N per set (evenly spaced) for "
-              "speed; in Photos mode every photo is scanned, so Sample is greyed. "
-              "Colour/Brightness/Similarity use perceptual CIELAB. 'Similarity' is a "
-              "nearest-neighbour path so neighbours look alike. Until you scan, "
-              "preview tiles use defaults: landscape 225,225,225, portrait 175,175,175.\n\n"
-              "Reference image (Colour/Brightness only): load a grayscale image and "
-              "the app arranges photos to match it — dark photos land in the dark "
-              "areas, and for Colour, cool colours (blue) go dark while warm (red) go "
-              "bright. 'Stretch' fits the image to the grid; 'Crop' centre-crops it to "
-              "the grid's aspect first. In Photos mode every photo is placed "
-              "individually (full 2-D). In Sets mode each set is kept together and the "
-              "set-blocks are placed to follow the reference across the grid in "
-              "reading order. Ascending/Descending inverts the reference. 'View "
-              "reference' shows the image resampled onto the grid. 'Clear' removes it."),
+    "order": ("Re-sequence the sets (folders) shown in the grid. Order by Name, "
+              "folder creation Date, and Ascending/Descending. 'Randomise' shuffles "
+              "them. After 'Scan colours', you can also order by Colour (hue) or "
+              "Brightness. The order inside each set never changes (Date Taken, then "
+              "name).\n\n"
+              "Scan colours computes each set's average colour (used to fill the "
+              "preview tiles and to order by colour/brightness). Choose 'All photos' "
+              "or 'Sample N' (N photos per set, evenly spaced) for speed. Until you "
+              "scan, preview tiles use defaults: landscape 225,225,225 and portrait "
+              "175,175,175.\n\n"
+              "Noise (Colour/Brightness only): instead of a plain dark-to-light "
+              "sort, arrange the sets along a pattern. Mode 'Wave' is a sine wave "
+              "(freq = number of cycles across the grid); 'Value noise' makes smooth "
+              "organic clusters (freq = pattern scale); 'Jitter' loosely sorts with "
+              "random nudges (amp = how scrambled). amp 0-1 blends pure sort (0) with "
+              "the full pattern (1); phase shifts it; Reseed re-rolls value-noise / "
+              "jitter."),
     "scan": ("Reads every image to get its pixel size, capture date (EXIF) and "
              "aspect ratio. Run this after choosing folders — the results feed "
              "all the options below."),
-    "ratios": ("Photos are grouped by shape. Tick the ratios you want to include "
-               "('Select all' / 'Select none' toggle every group). 'Crop all "
-               "included photos to' sets one cell shape; any included photo of a "
-               "different shape is centre-cropped to it. The most common ratio is "
-               "pre-selected.\n\n"
+    "ratios": ("Photos are grouped by shape. Tick the ratios you want to include. "
+               "'Crop all included photos to' sets one cell shape; any included "
+               "photo of a different shape is centre-cropped to it. The most common "
+               "ratio is pre-selected.\n\n"
                "Ratios are split into Landscape and Portrait lists; only ticked "
                "groups are used. Mixed mode needs at least one Landscape AND one "
                "Portrait ratio ticked, otherwise it is greyed out.\n\n"
                "Mixed mode (set-based): each FOLDER is one set, classified by its "
-               "dominant orientation among the ticked images. Tick 'Use both "
-               "orientations' to keep both from every folder (landscapes first as "
-               "H-groups, then portraits as V-groups). 'Base ratio A' is the "
-               "landscape ratio (verticals use 1/A); 'r' (1/2, 3/5, 2/3) is the "
-               "portrait-to-landscape width ratio. Landscapes pack in groups of "
-               "1/3/2 and portraits in groups of 2/5/3 (equal-width), filling one "
-               "perfect rectangle. Sets with < 15 usable images are skipped; A must "
-               "be >= 1/sqrt(r) or the combo is disabled.\n\n"
-               "With Order = Photos, Mixed mode ignores folders: all photos are "
-               "pooled by orientation, grouped, and the group-cells are ordered by "
-               "their average colour/brightness/similarity."),
+               "dominant orientation among the ticked images (the other orientation "
+               "is dropped). Your photo-count selection is applied per folder first. "
+               "'Base ratio A' is the landscape ratio (verticals use 1/A); 'r' "
+               "(1/2, 3/5, 2/3) is the portrait-to-landscape width ratio. Landscapes "
+               "pack in groups of 1/3/2 and portraits in groups of 2/5/3 (equal-"
+               "width), filling one perfect rectangle in folder order. Sets with "
+               "< 15 usable images are skipped; A must be >= 1/sqrt(r) or the combo "
+               "is disabled."),
     "selection": ("'Use all available photos' (default) places every included photo. "
                   "Untick it to cap the count: 'First N' takes them in order, "
                   "'Evenly spaced' samples uniformly across the whole set."),
@@ -153,10 +143,7 @@ class App(_BaseTk):
         self.border_color = "#000000"
         self._order_seed = 0
         self.set_colors = {}          # folder key -> (r, g, b); empty until scanned
-        self.photo_colors = {}        # photo path -> (r, g, b); for Order photos
-        self._rand_active = False      # Randomise button engaged (until next order op)
-        self.reference_path = None     # loaded grayscale reference image (or None)
-        self.reference_img = None
+        self._noise_seed = 0
 
         self._build_ui()
 
@@ -223,76 +210,73 @@ class App(_BaseTk):
         canvas.bind("<MouseWheel>", _wheel)
         root.bind("<MouseWheel>", _wheel)
 
-        # ----- RIGHT: Order sets / photos + colours, then live preview -----
-        of = self._group(right, "Order sets / photos", "order")
-        o0 = ttk.Frame(of); o0.pack(fill="x", padx=6, pady=(6, 0))
-        ttk.Label(o0, text="Order:").pack(side="left")
-        self.order_scope_var = tk.StringVar(value="sets")
-        ttk.Radiobutton(o0, text="Sets (sub-folders)", variable=self.order_scope_var,
-                        value="sets", command=self._on_scope_change).pack(side="left", padx=4)
-        ttk.Radiobutton(o0, text="Photos (individually)", variable=self.order_scope_var,
-                        value="photos", command=self._on_scope_change).pack(side="left", padx=4)
-
-        o1 = ttk.Frame(of); o1.pack(fill="x", padx=6, pady=(2, 2))
+        # ----- RIGHT: Order sets + colours, then live preview (always on) -----
+        of = self._group(right, "Order sets", "order")
+        o1 = ttk.Frame(of); o1.pack(fill="x", padx=6, pady=(6, 2))
         ttk.Label(o1, text="Order by:").pack(side="left")
         self.order_by_var = tk.StringVar(value="Name")
         self.order_by_combo = ttk.Combobox(
             o1, textvariable=self.order_by_var, width=12, state="readonly",
             values=["Name", "Date created"])
         self.order_by_combo.pack(side="left", padx=6)
-        self.order_by_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_order_change())
+        self.order_by_combo.bind("<<ComboboxSelected>>", lambda _e: self._apply_folder_order())
         self.order_dir_var = tk.StringVar(value="Ascending")
         od = ttk.Combobox(o1, textvariable=self.order_dir_var, width=11, state="readonly",
                           values=["Ascending", "Descending"])
         od.pack(side="left", padx=6)
-        od.bind("<<ComboboxSelected>>", lambda _e: self._on_order_change())
+        od.bind("<<ComboboxSelected>>", lambda _e: self._apply_folder_order())
         ttk.Button(o1, text="Randomise", command=self.randomize_order).pack(side="left", padx=6)
 
         o2 = ttk.Frame(of); o2.pack(fill="x", padx=6, pady=(0, 6))
         ttk.Button(o2, text="Scan colours", command=self.start_color_scan).pack(side="left")
-        self.color_source_var = tk.StringVar(value="average")
-        ttk.Radiobutton(o2, text="Average", variable=self.color_source_var,
-                        value="average").pack(side="left", padx=(10, 2))
-        ttk.Radiobutton(o2, text="Dominant", variable=self.color_source_var,
-                        value="dominant").pack(side="left")
-        self._sample_rb1 = ttk.Radiobutton(o2, text="Sample", variable=None)
         self.color_sample_mode = tk.StringVar(value="sample")
-        self._sample_rb1.config(variable=self.color_sample_mode, value="sample")
-        self._sample_rb1.pack(side="left", padx=(12, 2))
-        self.color_sample_n = tk.StringVar(value="10")
-        self._sample_entry = ttk.Entry(o2, textvariable=self.color_sample_n, width=5)
-        self._sample_entry.pack(side="left")
-        self._sample_rb2 = ttk.Radiobutton(o2, text="All", variable=self.color_sample_mode,
-                                            value="all")
-        self._sample_rb2.pack(side="left", padx=(4, 0))
-        self._sample_widgets = [self._sample_rb1, self._sample_entry, self._sample_rb2]
+        ttk.Radiobutton(o2, text="Sample", variable=self.color_sample_mode,
+                        value="sample").pack(side="left", padx=(10, 2))
+        self.color_sample_n = tk.StringVar(value="20")
+        ttk.Entry(o2, textvariable=self.color_sample_n, width=6).pack(side="left")
+        ttk.Label(o2, text="per set").pack(side="left", padx=(2, 8))
+        ttk.Radiobutton(o2, text="All photos", variable=self.color_sample_mode,
+                        value="all").pack(side="left")
 
         o3 = ttk.Frame(of); o3.pack(fill="x", padx=6, pady=(2, 0))
-        ttk.Label(o3, text="Reference:").pack(side="left")
-        ttk.Button(o3, text="Load image...", command=self.load_reference,
-                   width=12).pack(side="left", padx=4)
-        self.ref_clear_btn = ttk.Button(o3, text="Clear", width=6,
-                                        command=self.clear_reference)
-        self.ref_clear_btn.pack(side="left")
-        self.ref_fit_var = tk.StringVar(value="stretch")
-        ttk.Radiobutton(o3, text="Stretch", variable=self.ref_fit_var,
-                        value="stretch", command=self._on_ref_change).pack(side="left", padx=(10, 2))
-        ttk.Radiobutton(o3, text="Crop", variable=self.ref_fit_var,
-                        value="crop", command=self._on_ref_change).pack(side="left")
-        self.ref_label = ttk.Label(o3, text="(none)", foreground="#666")
-        self.ref_label.pack(side="left", padx=8)
+        self.noise_var = tk.BooleanVar(value=False)
+        self.noise_check = ttk.Checkbutton(o3, text="Noise", variable=self.noise_var,
+                                           command=self._on_noise_change)
+        self.noise_check.pack(side="left")
+        self.noise_mode_var = tk.StringVar(value="Wave")
+        self.noise_mode_combo = ttk.Combobox(
+            o3, textvariable=self.noise_mode_var, width=11, state="readonly",
+            values=["Wave", "Value noise", "Jitter"])
+        self.noise_mode_combo.pack(side="left", padx=4)
+        self.noise_mode_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_noise_change())
+
+        def _nfield(lbl, var, w=5):
+            ttk.Label(o3, text=lbl).pack(side="left", padx=(8, 1))
+            e = ttk.Entry(o3, textvariable=var, width=w)
+            e.pack(side="left")
+            e.bind("<KeyRelease>", lambda _e: self._on_noise_change())
+            return e
+
+        self.noise_freq_var = tk.StringVar(value="3")
+        self.noise_amp_var = tk.StringVar(value="1.0")
+        self.noise_phase_var = tk.StringVar(value="0")
+        self._noise_widgets = [
+            self.noise_mode_combo,
+            _nfield("freq", self.noise_freq_var),
+            _nfield("amp", self.noise_amp_var),
+            _nfield("phase", self.noise_phase_var),
+        ]
+        self.noise_reseed_btn = ttk.Button(o3, text="Reseed", width=8,
+                                           command=self._reseed_noise)
+        self.noise_reseed_btn.pack(side="left", padx=6)
+        self._noise_widgets.append(self.noise_reseed_btn)
 
         self.color_status = ttk.Label(of, text="Colours not scanned (using defaults).",
                                       foreground="#666")
         self.color_status.pack(anchor="w", padx=8, pady=(0, 4))
 
         ph = ttk.Frame(right); ph.pack(fill="x", padx=8, pady=(8, 0))
-        ttk.Label(ph, text="Live preview").pack(side="left")
-        self.view_reference_var = tk.BooleanVar(value=False)
-        self.view_reference_check = ttk.Checkbutton(
-            ph, text="View reference", variable=self.view_reference_var,
-            command=self._render_preview_cv)
-        self.view_reference_check.pack(side="left", padx=(12, 0))
+        ttk.Label(ph, text="Live preview (set colours)").pack(side="left")
         ttk.Label(ph, text="border px:").pack(side="left", padx=(12, 2))
         self._preview_border_var = tk.IntVar(value=1)
         ttk.Spinbox(ph, from_=0, to=40, width=5, textvariable=self._preview_border_var,
@@ -331,13 +315,6 @@ class App(_BaseTk):
 
         # --- 3. Aspect ratios ----------------------------------------
         f3 = self._group(root, "3.  Aspect ratios", "ratios")
-        sa = ttk.Frame(f3); sa.pack(fill="x", padx=6, pady=(4, 0))
-        self.select_all_btn = ttk.Button(sa, text="Select all", width=10,
-                                         command=lambda: self._select_all_ratios(True))
-        self.select_all_btn.pack(side="left")
-        self.select_none_btn = ttk.Button(sa, text="Select none", width=10,
-                                          command=lambda: self._select_all_ratios(False))
-        self.select_none_btn.pack(side="left", padx=6)
         self.ratio_frame = ttk.Frame(f3)
         self.ratio_frame.pack(fill="x", padx=6, pady=4)
         ttk.Label(self.ratio_frame, text="Scan first.").pack(anchor="w")
@@ -350,14 +327,9 @@ class App(_BaseTk):
         mr = ttk.Frame(f3); mr.pack(fill="x", padx=6, pady=(0, 2))
         self.mixed_var = tk.BooleanVar(value=False)
         self.mixed_check = ttk.Checkbutton(
-            mr, text="Mixed mode (combine horizontal + vertical sets)",
+            mr, text="Mixed mode (combine horizontal + vertical folder sets)",
             variable=self.mixed_var, command=self._on_mix_change)
         self.mixed_check.pack(side="left")
-        self.mix_both_var = tk.BooleanVar(value=False)
-        self.mix_both_check = ttk.Checkbutton(
-            mr, text="Use both orientations (H first, then V)",
-            variable=self.mix_both_var, command=self._on_mix_change)
-        self.mix_both_check.pack(side="left", padx=(12, 0))
         mr2 = ttk.Frame(f3); mr2.pack(fill="x", padx=6, pady=(0, 4))
         ttk.Label(mr2, text="Base ratio A:").pack(side="left")
         self.mixA_var = tk.StringVar()
@@ -468,8 +440,7 @@ class App(_BaseTk):
         self._toggle_quality()
         self._toggle_use_all()
         self._update_mixed_enabled()
-        self._update_scope_widgets()
-        self._update_reference_enabled()
+        self._update_noise_enabled()
 
         # Drag-and-drop registration.
         if TkinterDnD is not None:
@@ -585,171 +556,89 @@ class App(_BaseTk):
     def _set_rgb(self, folder):
         return self.set_colors.get(os.path.normcase(os.path.abspath(folder)), (0, 0, 0))
 
-    # ----- reference image -----
-    def load_reference(self):
-        path = filedialog.askopenfilename(
-            title="Load reference image (grayscale)",
-            filetypes=[("Images", "*.jpg *.jpeg *.png *.bmp *.tif *.tiff *.webp"),
-                       ("All files", "*.*")])
-        if not path:
-            return
+    # ----- noise parameters -----
+    def _noise_mode(self):
+        return {"Wave": "wave", "Value noise": "field",
+                "Jitter": "jitter"}.get(self.noise_mode_var.get(), "wave")
+
+    def _noise_freq(self):
         try:
-            self.reference_img = core.reference_grayscale(path)
-            self.reference_path = path
-            self.ref_label.config(text=os.path.basename(path), foreground="#080")
-            self.log("Loaded reference image: %s" % os.path.basename(path))
-        except Exception as exc:
-            messagebox.showerror("Reference image", "Could not load image:\n%s" % exc)
+            return max(0.1, float(self.noise_freq_var.get()))
+        except ValueError:
+            return 3.0
+
+    def _noise_amp(self):
+        try:
+            return min(1.0, max(0.0, float(self.noise_amp_var.get())))
+        except ValueError:
+            return 1.0
+
+    def _noise_phase(self):
+        try:
+            return float(self.noise_phase_var.get())
+        except ValueError:
+            return 0.0
+
+    def _on_noise_change(self):
+        self._update_noise_enabled()
+        self._apply_folder_order()
+
+    def _reseed_noise(self):
+        self._noise_seed = random.randint(0, 10 ** 9)
+        self._apply_folder_order()
+
+    def _update_noise_enabled(self):
+        """Noise only affects Colour/Brightness ordering, and needs scanned colours."""
+        if not hasattr(self, "noise_check"):
             return
-        self._update_reference_enabled()
-        self._apply_folder_order()
-
-    def clear_reference(self):
-        self.reference_img = None
-        self.reference_path = None
-        if hasattr(self, "ref_label"):
-            self.ref_label.config(text="(none)", foreground="#666")
-        self._update_reference_enabled()
-        self._apply_folder_order()
-
-    def _on_ref_change(self):
-        self._rand_active = False
-        self._apply_folder_order()
-
-    def _reference_active(self):
-        """Reference drives Colour/Brightness ordering when an image is loaded
-        and colours are available."""
-        return (self.reference_img is not None
-                and self._effective_by() in ("color", "brightness")
-                and self._colors_ready())
-
-    def _update_reference_enabled(self):
-        if hasattr(self, "view_reference_check"):
-            on = self.reference_img is not None
-            self.view_reference_check.config(state="normal" if on else "disabled")
-            if not on and self.view_reference_var.get():
-                self.view_reference_var.set(False)
-
-    def _ref_targets_2d(self, cols, rows, out_ar):
-        """cols*rows reference targets (row-major); Descending inverts the image."""
-        return core.reference_targets_2d(self.reference_img, cols, rows, out_ar,
-                                         fit=self.ref_fit_var.get(),
-                                         invert=self._order_desc())
-
-    # ----- scope / colour-source helpers -----
-    def _colors_ready(self):
-        return bool(self.photo_colors) if self._scope() == "photos" else bool(self.set_colors)
-
-    def _scope(self):
-        return self.order_scope_var.get() if hasattr(self, "order_scope_var") else "sets"
-
-    def _effective_by(self):
-        return "random" if self._rand_active else self._order_by()
-
-    def _refresh_order_by_values(self):
-        vals = ["Name", "Date created"]
-        if self._colors_ready():
-            vals += ["Colour", "Brightness", "Similarity"]
-        self.order_by_combo.config(values=vals)
-        if self.order_by_var.get() not in vals:
-            self.order_by_var.set("Name")
-
-    def _update_scope_widgets(self):
-        """Grey the per-set sampling controls when ordering photos individually."""
-        if not hasattr(self, "_sample_widgets"):
-            return
-        photos = self._scope() == "photos"
-        for w in self._sample_widgets:
-            w.config(state="disabled" if photos else "normal")
-
-    def _on_scope_change(self):
-        self._rand_active = False
-        self._update_scope_widgets()
-        self._refresh_order_by_values()
-        self._update_reference_enabled()
-        self._apply_folder_order()
-
-    def _on_order_change(self):
-        self._rand_active = False
-        self._update_reference_enabled()
-        self._apply_folder_order()
-
-    def _compute_order(self, items, get_rgb, get_name, get_date, get_id, by):
-        """Return a permutation of indices into `items` for order mode `by`."""
-        n = len(items)
-        idx = list(range(n))
-        if n <= 1:
-            return idx
-        if by == "random":
-            random.Random(self._order_seed).shuffle(idx)
-            return idx
-        if by == "created":
-            idx.sort(key=lambda i: get_date(items[i]))
-        elif by == "similarity":
-            labs = [core.rgb_to_lab(get_rgb(items[i])) for i in range(n)]
-            idx = core.similarity_path(labs)
-        elif by in ("color", "brightness"):
-            idx.sort(key=lambda i: core.color_sort_key(get_rgb(items[i]), by))
-        else:  # name
-            idx.sort(key=lambda i: get_name(items[i]))
-        if self._order_desc():
-            idx = list(reversed(idx))
-        return idx
-
-    @staticmethod
-    def _fid(path):
-        return zlib.crc32(os.path.normcase(os.path.abspath(path)).encode()) & 0xffffffff
+        active = self._order_by() in ("color", "brightness") and bool(self.set_colors)
+        self.noise_check.config(state="normal" if active else "disabled")
+        on = active and self.noise_var.get()
+        for w in self._noise_widgets:
+            if isinstance(w, ttk.Combobox):
+                w.config(state="readonly" if on else "disabled")
+            else:
+                w.config(state="normal" if on else "disabled")
 
     def _apply_folder_order(self):
-        by = self._effective_by()
-        if by in ("color", "brightness", "similarity") and not self._colors_ready():
+        by = self._order_by()
+        if by in ("color", "brightness") and not self.set_colors:
             messagebox.showinfo("Scan colours first",
-                                "Order by colour / brightness / similarity needs "
-                                "scanned colours. Click 'Scan colours' first.")
+                                "Order by colour/brightness needs set colours. "
+                                "Click 'Scan colours' first.")
             self.order_by_var.set("Name")
-            self._rand_active = False
             by = "name"
-        if self._scope() == "sets":
-            # When a reference image drives Colour/Brightness, the set-blocks are
-            # placed against the 2-D reference at layout time (see
-            # _apply_reference_2d); here we just keep the folder list in a sensible
-            # colour order.
-            order = self._compute_order(
-                self.folders,
-                get_rgb=self._set_rgb,
-                get_name=lambda f: os.path.basename(f).lower(),
-                get_date=self._ctime,
-                get_id=self._fid,
-                by=by)
+        if by in ("color", "brightness") and self.noise_var.get():
+            vals = [core.color_sort_key(self._set_rgb(f), by)[0] for f in self.folders]
+            ids = [zlib.crc32(os.path.normcase(os.path.abspath(f)).encode()) & 0xffffffff
+                   for f in self.folders]
+            order = core.noisy_order(vals, self._noise_mode(), self._noise_freq(),
+                                     self._noise_amp(), self._noise_seed,
+                                     self._noise_phase(), ids=ids)
             self.folders = [self.folders[i] for i in order]
-            self._populate_folder_list()
-        self._update_reference_enabled()
+        elif by == "created":
+            self.folders.sort(key=lambda f: self._ctime(f))
+        elif by in ("color", "brightness"):
+            self.folders.sort(key=lambda f: self._set_sort_key(f, by))
+        else:
+            self.folders.sort(key=lambda f: f.lower())
+        if self._order_desc():
+            self.folders.reverse()
+        self._populate_folder_list()
+        self._update_noise_enabled()
         if self.photos:
             self.refresh_selection()
         else:
             self.preview_layout()
 
     def randomize_order(self):
-        self._rand_active = True
         self._order_seed = random.randint(0, 10 ** 9)
-        self._apply_folder_order()
-
-    def _select_all_ratios(self, state):
-        for v in self.ratio_vars.values():
-            v.set(bool(state))
+        random.Random(self._order_seed).shuffle(self.folders)
+        self._populate_folder_list()
         if self.photos:
             self.refresh_selection()
-
-    def _order_photos(self, photos):
-        """Order a flat photo list per the current order-by (Order photos mode)."""
-        order = self._compute_order(
-            photos,
-            get_rgb=lambda p: self.photo_colors.get(p.path, (0, 0, 0)),
-            get_name=lambda p: p.name.lower(),
-            get_date=lambda p: p.within_folder_key(),
-            get_id=lambda p: self._fid(p.path),
-            by=self._effective_by())
-        return [photos[i] for i in order]
+        else:
+            self.preview_layout()
 
     def add_folder(self):
         d = filedialog.askdirectory(title="Select a source folder")
@@ -791,14 +680,14 @@ class App(_BaseTk):
         if not self.folders:
             messagebox.showwarning("No folders", "Add at least one source folder first.")
             return
-        # A fresh metadata scan invalidates any previously scanned colours.
+        # A fresh metadata scan invalidates any previously scanned set colours.
         self.set_colors = {}
-        self.photo_colors = {}
         if hasattr(self, "order_by_combo"):
-            self._refresh_order_by_values()
+            self.order_by_combo.config(values=["Name", "Date created"])
+            if self._order_by() in ("color", "brightness"):
+                self.order_by_var.set("Name")
             self.color_status.config(text="Colours not scanned (using defaults).",
                                      foreground="#666")
-            self._update_reference_enabled()
         self.generate_btn.config(state="disabled")
         threading.Thread(target=self._scan_worker, daemon=True).start()
 
@@ -811,36 +700,25 @@ class App(_BaseTk):
 
     def _color_worker(self):
         try:
-            source = self.color_source_var.get()        # 'average' | 'dominant'
-            scope = self._scope()
+            by_folder = {}
+            for p in self.photos:
+                by_folder.setdefault(
+                    os.path.normcase(os.path.abspath(p.folder)), []).append(p)
+            sets = list(by_folder.items())
+            if self.color_sample_mode.get() == "all":
+                sample, how = None, "all photos"
+            else:
+                sample = max(1, self._int(self.color_sample_n, 20))
+                how = "sample %d/set" % sample
+            self.log("Scanning set colours (%s) over %d set(s)..." % (how, len(sets)))
 
             def prog(i, total):
                 self.post(lambda: self.progress.config(maximum=total, value=i))
 
-            if scope == "photos":
-                self.log("Scanning %s colour of %d photo(s)..."
-                         % (source, len(self.photos)))
-                colors = core.scan_photo_colors(self.photos, source=source,
-                                                progress=prog, workers=self.workers())
-                self.photo_colors = colors
-                self.log("Photo colours ready for %d photo(s)." % len(colors))
-            else:
-                by_folder = {}
-                for p in self.photos:
-                    by_folder.setdefault(
-                        os.path.normcase(os.path.abspath(p.folder)), []).append(p)
-                sets = list(by_folder.items())
-                if self.color_sample_mode.get() == "all":
-                    sample, how = None, "all photos"
-                else:
-                    sample = max(1, self._int(self.color_sample_n, 10))
-                    how = "sample %d/set" % sample
-                self.log("Scanning %s set colours (%s) over %d set(s)..."
-                         % (source, how, len(sets)))
-                colors = core.scan_set_colors(sets, sample=sample, source=source,
-                                              progress=prog, workers=self.workers())
-                self.set_colors = colors
-                self.log("Set colours ready for %d set(s)." % len(colors))
+            colors = core.scan_set_colors(sets, sample=sample, progress=prog,
+                                          workers=self.workers())
+            self.set_colors = colors
+            self.log("Set colours ready for %d set(s)." % len(colors))
             self.post(self._on_colors_scanned)
         except Exception as exc:
             self.log("Colour scan failed: %s" % exc)
@@ -850,20 +728,13 @@ class App(_BaseTk):
             self.post(lambda: self.progress.config(value=0))
 
     def _on_colors_scanned(self):
-        self._refresh_order_by_values()
-        if self._scope() == "photos":
-            self.color_status.config(
-                text="Photo colours scanned (%d)." % len(self.photo_colors),
-                foreground="#080")
-        else:
-            self.color_status.config(
-                text="Set colours scanned (%d)." % len(self.set_colors),
-                foreground="#080")
-        self._update_reference_enabled()
-        if self.photos:
-            self.refresh_selection()
-        else:
-            self.preview_layout()
+        self.order_by_combo.config(
+            values=["Name", "Date created", "Colour", "Brightness"])
+        self.color_status.config(
+            text="Colours scanned for %d set(s)." % len(self.set_colors),
+            foreground="#080")
+        self._update_noise_enabled()
+        self.preview_layout()   # re-render preview tiles with real set colours
 
     def _scan_worker(self):
         try:
@@ -944,10 +815,7 @@ class App(_BaseTk):
     def refresh_selection(self):
         checked = [b for b, v in self.ratio_vars.items() if v.get()]
         matching = core.filter_by_buckets(self.photos, checked)
-        if self._scope() == "photos":
-            matching = self._order_photos(matching)
-        else:
-            matching = core.order_by_folder_list(matching, self.folders)
+        matching = core.order_by_folder_list(matching, self.folders)
         self.matching = matching
         self.avail_label.config(text="(max %d available)" % len(matching))
         try:
@@ -975,8 +843,8 @@ class App(_BaseTk):
     # --------------------------------------------------------------- layout
     def _order_by(self):
         return {"Name": "name", "Date created": "created",
-                "Colour": "color", "Brightness": "brightness",
-                "Similarity": "similarity"}.get(self.order_by_var.get(), "name")
+                "Colour": "color", "Brightness": "brightness"}.get(
+                    self.order_by_var.get(), "name")
 
     def _order_desc(self):
         return self.order_dir_var.get() == "Descending"
@@ -1042,118 +910,31 @@ class App(_BaseTk):
         if not slots:
             return None
         cols, rows, used = core.best_grid(len(slots), len(slots), cell_ar, target_ar)
-        slots = self._apply_reference_2d(slots, cols, rows, used, cell_ar, "normal")
         photos = core.count_photos_in_slots(slots[:used])
         return cols, rows, used, target_ar, cell_ar, "normal", photos, slots
 
-    @staticmethod
-    def _cell_folder(cell, mode):
-        return cell[1][0].folder if mode == "mixed" else cell[1].folder
-
-    def _apply_reference_2d(self, cells, cols, rows, used, cell_ar, mode):
-        """Reorder the placed cells to match the reference image sampled across the
-        grid in reading order. In Photos mode every cell is placed individually
-        (full 2-D). In Sets mode whole sets are kept together and the set-blocks
-        are placed to follow the reference in reading order."""
-        if not self._reference_active():
-            return cells
-        by = self._effective_by()
-        placed = cells[:used]
-        out_ar = (cols * cell_ar) / rows if rows else 1.0
-        targets = self._ref_targets_2d(cols, rows, out_ar)
-        if len(targets) != len(placed):
-            return cells
-
-        if self._scope() == "photos":
-            def scal(cell):
-                rgb = self._group_rgb(cell) if mode == "mixed" \
-                    else self.photo_colors.get(cell[1].path, (0, 0, 0))
-                return core.ref_scalar(rgb, by)
-            place = core.match_to_targets([scal(c) for c in placed], targets)
-            return [placed[place[p]] for p in range(len(place))] + cells[used:]
-
-        # Sets mode: group the placed cells into contiguous per-folder blocks,
-        # then order the blocks by matching each set's colour to the reference
-        # reduced to one band per set (reading order). Sets stay together.
-        blocks = []
-        cur, curf = [], object()
-        for c in placed:
-            fol = self._cell_folder(c, mode)
-            if cur and fol != curf:
-                blocks.append(cur); cur = []
-            cur.append(c); curf = fol
-        if cur:
-            blocks.append(cur)
-
-        def block_scalar(blk):
-            rgb = self._set_rgb(self._cell_folder(blk[0], mode))
-            return core.ref_scalar(rgb, by)
-
-        bands = core.reduce_targets(targets, len(blocks))
-        place = core.match_to_targets([block_scalar(b) for b in blocks], bands)
-        out = []
-        for p in range(len(blocks)):
-            out.extend(blocks[place[p]])
-        return out + cells[used:]
-
-    def _group_rgb(self, group):
-        cols = [self.photo_colors.get(p.path) for p in group[1]]
-        cols = [c for c in cols if c]
-        if not cols:
-            return (0, 0, 0)
-        n = len(cols)
-        return (sum(c[0] for c in cols) // n, sum(c[1] for c in cols) // n,
-                sum(c[2] for c in cols) // n)
-
     def _compute_mixed(self, target_ar):
+        if not self.folders:
+            return None
         A = self._mix_A()
         r = self.mixR_var.get()
         if A is None or r not in core.R_VALUES or not core.mixed_validity(A, r)[0]:
             return None
         count = None if self.use_all_var.get() else max(1, self._int(self.count_var, 1))
         method = self.method_var.get()
-        gh, gv = core.GROUP_SIZES[r]
-
-        if self._scope() == "photos":
-            # Ignore folders: pool photos by orientation (already key-ordered in
-            # self.matching), cap to count, chunk into groups, then order all
-            # group-cells by their average colour/brightness/similarity.
-            sel = self.matching
-            if count is not None:
-                sel = core.select_photos(sel, count, method)
-            land = [p for p in sel if p.is_landscape]
-            port = [p for p in sel if not p.is_landscape]
-            groups = (core.photos_to_groups(land, gh, "H")
-                      + core.photos_to_groups(port, gv, "V"))
-            if not groups:
-                return None
-            order = self._compute_order(
-                groups,
-                get_rgb=self._group_rgb,
-                get_name=lambda g: g[1][0].name.lower(),
-                get_date=lambda g: g[1][0].within_folder_key(),
-                get_id=lambda g: self._fid(g[1][0].path),
-                by=self._effective_by())
-            groups = [groups[i] for i in order]
-        else:
-            if not self.folders:
-                return None
-            use_both = self.mix_both_var.get()
-            by_folder = {}
-            for p in self.matching:   # only the ticked aspect-ratio groups
-                by_folder.setdefault(os.path.normcase(os.path.abspath(p.folder)), []).append(p)
-            sets = []
-            for f in self.folders:
-                fp = by_folder.get(os.path.normcase(os.path.abspath(f)))
-                if fp:
-                    sets.extend(core.select_and_classify_multi(fp, count, method, use_both))
-            groups = core.build_mixed_groups(sets, r)
-
+        by_folder = {}
+        for p in self.matching:   # only the ticked aspect-ratio groups
+            by_folder.setdefault(os.path.normcase(os.path.abspath(p.folder)), []).append(p)
+        sets = []
+        for f in self.folders:
+            fp = by_folder.get(os.path.normcase(os.path.abspath(f)))
+            if fp:
+                sets.append(core.select_and_classify(fp, count, method))
+        groups = core.build_mixed_groups(sets, r)
         if not groups:
             return None
         cell_ar = core.mixed_cell_ar(r)
         cols, rows, used = core.best_grid(len(groups), len(groups), cell_ar, target_ar)
-        groups = self._apply_reference_2d(groups, cols, rows, used, cell_ar, "mixed")
         photos = core.count_photos_in_groups(groups[:used])
         return cols, rows, used, target_ar, cell_ar, "mixed", photos, groups
 
@@ -1223,19 +1004,6 @@ class App(_BaseTk):
         img = Image.new("RGB", (max(1, gw), max(1, gh)), BLACK)
         d = ImageDraw.Draw(img)
         n = min(used, cols * rows, len(cells))
-        scope = self._scope()
-
-        # View-reference: paint the reference resampled onto the grid as B&W.
-        field = None
-        if self.view_reference_var.get() and self.reference_img is not None:
-            out_ar = (cols * cell_ar) / rows if rows else 1.0
-            field = self._ref_targets_2d(cols, rows, out_ar)
-
-        def _avg(cols):
-            m = len(cols)
-            return (sum(v[0] for v in cols) // m, sum(v[1] for v in cols) // m,
-                    sum(v[2] for v in cols) // m)
-
         for k in range(n):
             r, c = divmod(k, cols)
             x = gap + c * (cw + gap)
@@ -1244,25 +1012,16 @@ class App(_BaseTk):
             if mode == "mixed":
                 t = len(cell[1])
                 is_port = (cell[0] == "V")
-                paths = [p.path for p in cell[1]]
                 folder = cell[1][0].folder
             else:
                 t = 1 if cell[0] == "L" else 2
                 is_port = (cell[0] == "P")
-                paths = [cell[1].path]
                 folder = cell[1].folder
-            default = (175, 175, 175) if is_port else (225, 225, 225)
-            if field is not None:
-                g = int(round(field[k] * 255))
-                color = (g, g, g)
-            elif scope == "photos" and self.photo_colors:
-                cc = [self.photo_colors[p] for p in paths if p in self.photo_colors]
-                color = _avg(cc) if cc else default
-            elif scope == "sets":
-                ck = os.path.normcase(os.path.abspath(folder))
-                color = self.set_colors.get(ck, default)
+            ck = os.path.normcase(os.path.abspath(folder))
+            if ck in self.set_colors:
+                color = self.set_colors[ck]
             else:
-                color = default
+                color = (175, 175, 175) if is_port else (225, 225, 225)
             if t <= 1 or cw - (t - 1) * gap < 2 * t:
                 d.rectangle([x, y, x + cw - 1, y + ch - 1], fill=color)
             else:
@@ -1278,13 +1037,8 @@ class App(_BaseTk):
             img.thumbnail((max(1, int(availw)), max(1, int(availh))))
         self._preview_img = ImageTk.PhotoImage(img)   # keep a reference
         cv.create_image(W / 2, H / 2, image=self._preview_img)
-        if field is not None:
-            col_note = "reference (B&W)"
-        elif scope == "photos":
-            col_note = "photo colours" if self.photo_colors else "default colours"
-        else:
-            col_note = ("set colours" if self.set_colors
-                        else "default colours (225 land / 175 port)")
+        col_note = ("set colours" if self.set_colors
+                    else "default colours (225/225/225 land, 175/175/175 port)")
         self._preview_info.config(
             text="Grid %dx%d = %d photos%s   |   target aspect %.3f   |   border %d px   |   %s"
             % (cols, rows, photos, " (mixed)" if mode == "mixed" else "", target_ar,

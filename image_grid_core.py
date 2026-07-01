@@ -236,7 +236,7 @@ def order_by_folder_list(photos, folders):
 
 
 # ----------------------------------------------------------------------------
-# Set colours (average colour per set, for ordering + preview)
+# Colours (per set or per photo, for ordering + preview)
 # ----------------------------------------------------------------------------
 
 def _photo_avg(path):
@@ -253,6 +253,57 @@ def _photo_avg(path):
         return None
 
 
+def _photo_dominant(path):
+    """Most common colour of one image (via quantisation). None on failure."""
+    try:
+        with Image.open(path) as im:
+            try:
+                im.draft("RGB", (64, 64))
+            except Exception:
+                pass
+            im = im.convert("RGB")
+            im.thumbnail((64, 64), Image.LANCZOS)
+            pal = im.quantize(colors=16, method=Image.Quantize.MEDIANCUT)
+            counts = pal.getcolors()          # [(count, palette_index), ...]
+            if not counts:
+                return None
+            counts.sort(reverse=True)
+            idx = counts[0][1]
+            p = pal.getpalette()
+            return (p[idx * 3], p[idx * 3 + 1], p[idx * 3 + 2])
+    except Exception:
+        return None
+
+
+def _photo_color_t(arg):
+    """Worker entry: arg = (path, source). source in {'average', 'dominant'}."""
+    path, source = arg
+    return _photo_dominant(path) if source == "dominant" else _photo_avg(path)
+
+
+def _map_colors(args, progress, workers):
+    """Map _photo_color_t over args=[(path, source), ...] -> list of rgb|None."""
+    total = len(args)
+    if total == 0:
+        return []
+    if workers is None:
+        workers = n_workers()
+    out = [None] * total
+    if workers <= 1 or total < PARALLEL_THRESHOLD:
+        for i, a in enumerate(args):
+            out[i] = _photo_color_t(a)
+            if progress and (i % 25 == 0 or i == total - 1):
+                progress(i + 1, total)
+    else:
+        chunk = max(1, total // (workers * 8))
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            for i, c in enumerate(ex.map(_photo_color_t, args, chunksize=chunk)):
+                out[i] = c
+                if progress and (i % 25 == 0 or i == total - 1):
+                    progress(i + 1, total)
+    return out
+
+
 def _even_sample(photos, sample):
     """Up to `sample` photos, evenly spaced. sample=None -> all photos."""
     n = len(photos)
@@ -264,129 +315,179 @@ def _even_sample(photos, sample):
     return [photos[int(i * step)] for i in range(sample)]
 
 
-def scan_set_colors(sets, sample=None, progress=None, workers=None):
-    """Average colour per set.
+def scan_set_colors(sets, sample=None, source="average", progress=None, workers=None):
+    """Representative colour per set.
 
-    sets: list of (key, [Photo]). For each set the photos are ordered by Date
-    Taken/name, then `sample` of them are taken evenly spaced (sample=None ->
-    all photos) and averaged. Returns {key: (r, g, b)}.
+    sets: list of (key, [Photo]). Each set's photos are ordered by Date Taken/
+    name, `sample` taken evenly spaced (None -> all), each read as `source`
+    ('average' or 'dominant') colour and averaged. Returns {key: (r, g, b)}.
     """
-    tasks = []          # flat (key, path) list, preserves order for ex.map
+    keys, args = [], []
     for key, photos in sets:
         ordered = sorted(photos, key=lambda p: p.within_folder_key())
         for p in _even_sample(ordered, sample):
-            tasks.append((key, p.path))
-    total = len(tasks)
-    sums = {}           # key -> [r, g, b, count]
-
-    def _acc(key, c):
+            keys.append(key)
+            args.append((p.path, source))
+    cols = _map_colors(args, progress, workers)
+    sums = {}
+    for key, c in zip(keys, cols):
         if c is None:
-            return
+            continue
         s = sums.setdefault(key, [0, 0, 0, 0])
         s[0] += c[0]; s[1] += c[1]; s[2] += c[2]; s[3] += 1
+    return {k: (round(s[0] / s[3]), round(s[1] / s[3]), round(s[2] / s[3]))
+            for k, s in sums.items() if s[3] > 0}
 
-    if workers is None:
-        workers = n_workers()
-    paths = [t[1] for t in tasks]
 
-    if total == 0:
-        return {}
-    if workers <= 1 or total < PARALLEL_THRESHOLD:
-        for i, (key, path) in enumerate(tasks):
-            _acc(key, _photo_avg(path))
-            if progress and (i % 25 == 0 or i == total - 1):
-                progress(i + 1, total)
-    else:
-        chunk = max(1, total // (workers * 8))
-        with ProcessPoolExecutor(max_workers=workers) as ex:
-            for i, c in enumerate(ex.map(_photo_avg, paths, chunksize=chunk)):
-                _acc(tasks[i][0], c)
-                if progress and (i % 25 == 0 or i == total - 1):
-                    progress(i + 1, total)
+def scan_photo_colors(photos, source="average", progress=None, workers=None):
+    """Per-photo colour (no sampling). Returns {path: (r, g, b)}."""
+    args = [(p.path, source) for p in photos]
+    cols = _map_colors(args, progress, workers)
+    return {p.path: c for p, c in zip(photos, cols) if c is not None}
 
-    out = {}
-    for key, s in sums.items():
-        if s[3] > 0:
-            out[key] = (round(s[0] / s[3]), round(s[1] / s[3]), round(s[2] / s[3]))
-    return out
+
+# --- perceptual colour (CIELAB) ---------------------------------------------
+
+def _srgb_to_linear(c):
+    c /= 255.0
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def rgb_to_lab(rgb):
+    """sRGB (0-255) -> CIELAB (D65). Perceptually uniform-ish coordinates."""
+    r, g, b = (_srgb_to_linear(v) for v in rgb)
+    x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047
+    y = (r * 0.2126 + g * 0.7152 + b * 0.0722)
+    z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883
+
+    def f(t):
+        return t ** (1.0 / 3.0) if t > 0.008856 else (7.787 * t + 16.0 / 116.0)
+
+    fx, fy, fz = f(x), f(y), f(z)
+    return (116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
+
+
+def lab_distance(a, b):
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
 
 
 def color_sort_key(rgb, by="brightness"):
-    """Sort key for an (r, g, b) set colour.
-    by='color' -> hue, then saturation, then value (rainbow-ish ordering).
-    by='brightness' -> perceived luminance (Rec. 601)."""
-    r, g, b = (c / 255.0 for c in rgb)
+    """Perceptual (CIELAB) sort key for an (r, g, b) colour.
+    by='color'      -> LAB hue angle, then chroma, then lightness.
+    by='brightness' -> LAB lightness L*."""
+    L, a, b = rgb_to_lab(rgb)
     if by == "color":
-        h, s, v = colorsys.rgb_to_hsv(r, g, b)
-        return (h, s, v)
-    return (0.299 * r + 0.587 * g + 0.114 * b,)
+        hue = (math.atan2(b, a) / (2.0 * math.pi)) % 1.0
+        chroma = math.hypot(a, b)
+        return (hue, chroma, L)
+    return (L,)
 
 
-# ----------------------------------------------------------------------------
-# Noise ordering (arrange sets by a wave / noise along the sequence)
-# ----------------------------------------------------------------------------
-
-def _hash01(i, seed):
-    """Deterministic pseudo-random float in [0, 1) from an integer and a seed."""
-    h = (int(i) * 374761393 + int(seed) * 668265263) & 0xFFFFFFFF
-    h = (h ^ (h >> 13)) * 1274126177 & 0xFFFFFFFF
-    h ^= (h >> 16)
-    return (h & 0xFFFFFFFF) / 4294967296.0
-
-
-def _value_noise_1d(x, seed):
-    """Smooth 1-D value noise in [0, 1): random lattice values, smoothstep lerp."""
-    x0 = math.floor(x)
-    t = x - x0
-    t = t * t * (3 - 2 * t)
-    a = _hash01(x0, seed)
-    b = _hash01(x0 + 1, seed)
-    return a + t * (b - a)
-
-
-def noisy_order(values, mode="wave", freq=3.0, amp=1.0, seed=0, phase=0.0, ids=None):
-    """Permutation (indices into `values`) that arranges items so their scalar
-    `values` follow a pattern along the output sequence.
-
-    mode:
-      'wave'   - sine wave; `freq` = number of cycles across the sequence.
-      'field'  - smooth 1-D value noise; `freq` = pattern scale (blobs).
-      'jitter' - sort by value, then randomly nudge; `amp` = how scrambled.
-    `amp` in [0, 1] blends a pure value-sort (0) with the full pattern (1).
-    `phase` shifts the wave/noise; `seed` re-rolls value-noise / jitter.
-    `ids` (optional) gives a stable per-item id so jitter is independent of the
-    incoming order; defaults to the item index.
-    """
-    n = len(values)
-    if n <= 1:
+def similarity_path(labs, start=None):
+    """Greedy nearest-neighbour ordering in CIELAB space: each item is followed
+    by its closest not-yet-placed neighbour, so colours flow smoothly. Starts at
+    the darkest item (or `start`). Returns a permutation of indices. O(n^2)."""
+    n = len(labs)
+    if n <= 2:
         return list(range(n))
-    amp = max(0.0, min(1.0, float(amp)))
-    if ids is None:
-        ids = [i + 1 for i in range(n)]
+    if start is None:
+        start = min(range(n), key=lambda i: labs[i][0])
+    visited = [False] * n
+    visited[start] = True
+    order = [start]
+    cur = start
+    for _ in range(n - 1):
+        cl = labs[cur]
+        best, bd = -1, None
+        for j in range(n):
+            if visited[j]:
+                continue
+            lj = labs[j]
+            d = (cl[0] - lj[0]) ** 2 + (cl[1] - lj[1]) ** 2 + (cl[2] - lj[2]) ** 2
+            if bd is None or d < bd:
+                bd, best = d, j
+        visited[best] = True
+        order.append(best)
+        cur = best
+    return order
 
-    if mode == "jitter":
-        order = sorted(range(n), key=lambda i: values[i])
-        norm = [0.0] * n
-        for rank, i in enumerate(order):
-            norm[i] = rank / (n - 1)
-        key = [(1 - amp) * norm[i] + amp * _hash01(ids[i], seed) for i in range(n)]
-        return sorted(range(n), key=lambda i: key[i])
 
-    # wave / field: match the value-sorted items onto a target curve by rank.
-    sorted_idx = sorted(range(n), key=lambda i: values[i])  # low value -> high
-    targets = []
-    for p in range(n):
-        ramp = p / (n - 1)
-        if mode == "field":
-            w = _value_noise_1d(freq * p / n + phase, seed)
-        else:  # wave
-            w = 0.5 + 0.5 * math.sin(2 * math.pi * freq * p / n + phase)
-        targets.append((1 - amp) * ramp + amp * w)
-    pos_by_target = sorted(range(n), key=lambda p: targets[p])
+# ----------------------------------------------------------------------------
+# Reference-image ordering (arrange items to match a loaded grayscale image)
+# ----------------------------------------------------------------------------
+
+def ref_scalar(rgb, by="brightness"):
+    """Scalar used to match an item against a grayscale reference.
+    by='brightness' -> CIELAB lightness L* (dark items -> dark areas).
+    by='color'      -> warm/cool axis (red -> bright areas, blue -> dark),
+                       weighted by saturation so near-greys stay neutral."""
+    if by == "color":
+        h, s, _v = colorsys.rgb_to_hsv(*(c / 255.0 for c in rgb))
+        return s * math.cos(2.0 * math.pi * h)
+    return rgb_to_lab(rgb)[0]
+
+
+def match_to_targets(scalars, targets):
+    """Rank-match items to target cells: the item with the smallest scalar goes
+    to the cell with the smallest target, etc. Returns result[cell] = item index.
+    len(scalars) must equal len(targets)."""
+    n = len(scalars)
+    if n == 0:
+        return []
+    sorted_items = sorted(range(n), key=lambda i: scalars[i])   # low -> high
+    pos_by_target = sorted(range(n), key=lambda p: targets[p])  # low -> high
     result = [0] * n
     for rank, p in enumerate(pos_by_target):
-        result[p] = sorted_idx[rank]
+        result[p] = sorted_items[rank]
     return result
+
+
+def reduce_targets(targets, n):
+    """Reduce a target sequence to n values by averaging equal consecutive bands
+    (preserves the reading-order sweep of the source). Used to place whole sets."""
+    m = len(targets)
+    if n <= 0 or m == 0:
+        return []
+    out = []
+    for i in range(n):
+        a = i * m // n
+        b = max(a + 1, (i + 1) * m // n)
+        seg = targets[a:b]
+        out.append(sum(seg) / len(seg))
+    return out
+
+
+def reference_grayscale(path):
+    """Open an image as an 8-bit grayscale PIL image (for use as a reference)."""
+    with Image.open(path) as im:
+        return im.convert("L").copy()
+
+
+def reference_targets_2d(gray, cols, rows, out_ar=None, fit="stretch", invert=False):
+    """Sample a grayscale reference into cols*rows target values in row-major
+    order (each in [0, 1]). fit='crop' centre-crops to out_ar first (no
+    distortion); fit='stretch' resizes straight to cols x rows. invert flips
+    light<->dark."""
+    im = gray
+    if fit == "crop" and out_ar:
+        im = _center_crop_to_ratio(im, out_ar)
+    im = im.resize((max(1, cols), max(1, rows)), Image.LANCZOS)
+    vals = [v / 255.0 for v in im.getdata()]
+    if invert:
+        vals = [1.0 - v for v in vals]
+    return vals
+
+
+def reference_targets_1d(gray, n, invert=False):
+    """Reduce a grayscale reference to `n` target values (top-to-bottom sweep),
+    for ordering whole sets 1-D. Each value in [0, 1]."""
+    if n <= 0:
+        return []
+    im = gray.resize((1, n), Image.LANCZOS)
+    vals = [v / 255.0 for v in im.getdata()]
+    if invert:
+        vals = [1.0 - v for v in vals]
+    return vals
 
 
 # ----------------------------------------------------------------------------
@@ -662,6 +763,22 @@ def mixed_cell_ar(r_key):
     return gh / math.sqrt(R_VALUES[r_key])
 
 
+def classify_both(photos):
+    """Split a folder's photos into a landscape (H) segment then a portrait (V)
+    segment, each sorted by Date Taken/name. Returns a list of (kind, photos)
+    segments (0-2), horizontals first."""
+    land = sorted((p for p in photos if p.is_landscape),
+                  key=lambda p: p.within_folder_key())
+    port = sorted((p for p in photos if not p.is_landscape),
+                  key=lambda p: p.within_folder_key())
+    segs = []
+    if land:
+        segs.append(("H", land))
+    if port:
+        segs.append(("V", port))
+    return segs
+
+
 def select_and_classify(folder_photos, count, method="first"):
     """Per folder, in folder order: sort by Date Taken/name, apply the user's
     photo-count selection FIRST (First N / Evenly spaced), then classify the
@@ -672,6 +789,28 @@ def select_and_classify(folder_photos, count, method="first"):
     else:
         sel = select_photos(ordered, count, method)
     return classify_set(sel)
+
+
+def select_and_classify_multi(folder_photos, count, method="first", use_both=False):
+    """Like select_and_classify but returns a LIST of (kind, photos) segments.
+    use_both=False -> the dominant-orientation segment only (0-1 segments).
+    use_both=True  -> both orientations, horizontals (H) first then verticals (V)."""
+    ordered = sorted(folder_photos, key=lambda p: p.within_folder_key())
+    if count is None or count >= len(ordered):
+        sel = ordered
+    else:
+        sel = select_photos(ordered, count, method)
+    if use_both:
+        return classify_both(sel)
+    kind, keep = classify_set(sel)
+    return [(kind, keep)] if keep else []
+
+
+def photos_to_groups(photos, gsize, kind):
+    """Chunk an (already ordered) photo list into whole (kind, [photos]) groups
+    of size gsize, dropping any remainder. Used by Order-photos mixed mode."""
+    usable = (len(photos) // gsize) * gsize
+    return [(kind, photos[i:i + gsize]) for i in range(0, usable, gsize)]
 
 
 def build_mixed_groups(sets, r_key):
